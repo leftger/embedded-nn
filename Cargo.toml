@@ -1,0 +1,20 @@
+[package]
+name = "embedded-nn"
+version = "0.2.0"
+edition = "2021"
+authors = ["embedded-nn contributors"]
+license = "MIT OR Apache-2.0"
+description = "A pure Rust, #![no_std] neural network inference library inspired by CMSIS-NN for microcontrollers and embedded targets."
+readme = "README.md"
+keywords = ["no-std", "embedded", "cmsis-nn", "neural-network", "quantization"]
+categories = ["embedded", "science", "no-std"]
+
+[features]
+default = []
+alloc = []
+float = []
+simd = []
+
+[dependencies]
+
+[dev-dependencies]

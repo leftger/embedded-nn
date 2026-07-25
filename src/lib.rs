@@ -1,0 +1,58 @@
+//! # embedded-nn
+//!
+//! `embedded-nn` is a pure Rust, `#![no_std]` neural network inference library for microcontrollers and embedded targets,
+//! inspired by ARM's CMSIS-NN and TensorFlow Lite Micro.
+//!
+//! ## Modules
+//! - [`types`]: Dimensional shapes, parameter structures, error types.
+//! - [`support`]: Fixed-point quantization math, rounding division, bit operations.
+//! - [`activations`]: ReLU, ReLU6, LeakyReLU, Sigmoid, Tanh.
+//! - [`basic_math`]: Elementwise addition, subtraction, and multiplication.
+//! - [`convolution`]: 2D Convolution, 1x1 Convolution, Depthwise Convolution, Transposed Conv, 1D Temporal Conv.
+//! - [`fully_connected`]: Fully Connected (Linear / Dense) layers and Batch Matrix Multiplication (`BatchMatMul`).
+//! - [`pooling`]: Max Pooling, Average Pooling.
+//! - [`softmax`]: Softmax activation.
+//! - [`concat`]: Depthwise concatenation.
+//! - [`pad`]: Tensor padding.
+//! - [`transpose`]: Matrix and spatial transposition.
+//! - [`reshape`]: Reshaping operations.
+//! - [`simd`]: Target SIMD vectorization abstractions, ARM DSP SMLAD assembly, and dot-product acceleration.
+//! - [`subbyte`]: Sub-byte 4-bit (`s4`) quantization layers and packing helpers.
+//! - [`recurrent`]: Recurrent neural network layers (LSTM cell, SVDF filter with 8-bit & 16-bit state).
+//! - [`float_ops`]: Floating-point (`f32` & IEEE-754 `f16`) fallback layers.
+
+#![no_std]
+#![deny(missing_docs)]
+
+pub mod activations;
+pub mod basic_math;
+pub mod concat;
+pub mod convolution;
+pub mod float_ops;
+pub mod fully_connected;
+pub mod pad;
+pub mod pooling;
+pub mod recurrent;
+pub mod reshape;
+pub mod simd;
+pub mod softmax;
+pub mod subbyte;
+pub mod support;
+pub mod transpose;
+pub mod types;
+
+pub use support::{
+    clamp, divide_by_power_of_two, doubling_high_mult_no_sat, pack_q15x2_32x1, pack_s8x4_32x1,
+    requantize, requantize_s64,
+};
+pub use types::{
+    Activation, Context, ConvParams, Dims, DwConvParams, Error, FcParams, PerChannelQuantParams,
+    PerTensorQuantParams, PoolParams, QuantParams, Result, SoftmaxParams, Tile,
+};
+
+pub use convolution::{convolve_1_x_n_s8, transpose_conv_s8};
+pub use float_ops::{f16_to_f32, f32_to_f16};
+pub use fully_connected::{batch_matmul_s16, batch_matmul_s8};
+pub use recurrent::{lstm_step_s16, lstm_step_s8_s16, svdf_s8, svdf_state_s16_s8, LstmGateParams};
+pub use simd::{vec_dot_s16, vec_dot_s8};
+pub use subbyte::{convolve_s4, fully_connected_s4, pack_s4_pair, unpack_s4_pair};
