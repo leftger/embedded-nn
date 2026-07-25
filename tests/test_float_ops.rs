@@ -1,7 +1,6 @@
 use embedded_nn::{
     float_ops::{
-        convolve_f32, f16_to_f32, f32_to_f16, fully_connected_f32, relu6_f32, relu_f32,
-        softmax_f32,
+        convolve_f32, f16_to_f32, f32_to_f16, fully_connected_f32, relu6_f32, relu_f32, softmax_f32,
     },
     Dims, Tile,
 };

@@ -116,8 +116,8 @@ pub fn convolve_s4(
                         None => 0,
                     };
 
-                    let ker_packed_row =
-                        &packed_kernel[out_c * packed_kernel_cols..(out_c + 1) * packed_kernel_cols];
+                    let ker_packed_row = &packed_kernel
+                        [out_c * packed_kernel_cols..(out_c + 1) * packed_kernel_cols];
                     let mut k_flat_idx = 0usize;
 
                     for ky in 0..kernel_h {

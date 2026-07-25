@@ -27,7 +27,9 @@ pub fn exp_on_negative_values(val: i32) -> i32 {
     let op2 = x + divide_by_power_of_two(mul_sat(op1, 715827883) + x2, 1);
     let mut result = 1895147668 + mul_sat(1895147668, op2);
 
-    let constants = [1672461947, 1302514674, 790015084, 290630308, 39332535, 720401, 242];
+    let constants = [
+        1672461947, 1302514674, 790015084, 290630308, 39332535, 720401, 242,
+    ];
 
     for &c in constants.iter() {
         if (remainder & (1 << shift)) != 0 {
@@ -90,7 +92,11 @@ pub fn softmax_s8(
         }
 
         // 3. Requantize output
-        let headroom = if sum > 0 { sum.leading_zeros() as i32 } else { 32 };
+        let headroom = if sum > 0 {
+            sum.leading_zeros() as i32
+        } else {
+            32
+        };
         let shifted_sum = if sum > 0 {
             (sum << headroom) - (1i32 << 31)
         } else {
@@ -148,7 +154,11 @@ pub fn softmax_s16(
             }
         }
 
-        let headroom = if sum > 0 { sum.leading_zeros() as i32 } else { 32 };
+        let headroom = if sum > 0 {
+            sum.leading_zeros() as i32
+        } else {
+            32
+        };
         let shifted_sum = if sum > 0 {
             (sum << headroom) - (1i32 << 31)
         } else {

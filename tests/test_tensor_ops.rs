@@ -12,10 +12,7 @@ fn test_concatenation_s8_depth_and_multi_tensor() {
     let in1 = [1i8, 2i8, 3i8, 4i8];
 
     let in2_dims = Dims::new(1, 2, 2, 2);
-    let in2 = [
-        10i8, 20i8, 30i8, 40i8,
-        50i8, 60i8, 70i8, 80i8,
-    ];
+    let in2 = [10i8, 20i8, 30i8, 40i8, 50i8, 60i8, 70i8, 80i8];
 
     let out_dims = Dims::new(1, 2, 2, 3);
     let mut out = [0i8; 12];
@@ -53,7 +50,16 @@ fn test_pad_s8_asymmetric_and_values() {
     let out_dims = Dims::new(1, 3, 4, 1);
     let mut out = [0i8; 12];
 
-    pad_s8(&in_dims, &input, &pad_before, &pad_after, -1i8, &out_dims, &mut out).unwrap();
+    pad_s8(
+        &in_dims,
+        &input,
+        &pad_before,
+        &pad_after,
+        -1i8,
+        &out_dims,
+        &mut out,
+    )
+    .unwrap();
 
     // Check padding value -1 outside
     assert_eq!(out[0], -1);

@@ -1,6 +1,6 @@
 use embedded_nn::{
     basic_math::{
-        elementwise_add_s8, elementwise_add_s16, elementwise_mul_s16, elementwise_mul_s8,
+        elementwise_add_s16, elementwise_add_s8, elementwise_mul_s16, elementwise_mul_s8,
         elementwise_sub_s8, ElementwiseAddParams, ElementwiseMulParams,
     },
     Activation,

@@ -1,7 +1,9 @@
 //! Convolution layer operations for quantized neural networks.
 
 use crate::support::{clamp, requantize};
-use crate::types::{ConvParams, Dims, DwConvParams, Error, PerChannelQuantParams, PerTensorQuantParams, Result};
+use crate::types::{
+    ConvParams, Dims, DwConvParams, Error, PerChannelQuantParams, PerTensorQuantParams, Result,
+};
 
 /// Performs standard 2D Convolution with per-tensor quantization.
 pub fn convolve_s8(
@@ -55,14 +57,16 @@ pub fn convolve_s8(
                                 for kx in 0..kernel_w {
                                     let in_x = base_x + kx as i32 * conv_params.dilation.w;
                                     if in_x >= 0 && in_x < input_dims.w {
-                                        let in_idx_base =
-                                            ((b * input_h + in_y as usize) * input_w + in_x as usize) * input_c
-                                                + g * kernel_c;
+                                        let in_idx_base = ((b * input_h + in_y as usize) * input_w
+                                            + in_x as usize)
+                                            * input_c
+                                            + g * kernel_c;
                                         let ker_idx_base =
                                             ((out_c * kernel_h + ky) * kernel_w + kx) * kernel_c;
 
                                         for ic in 0..kernel_c {
-                                            let lhs = input[in_idx_base + ic] as i32 + conv_params.input_offset;
+                                            let lhs = input[in_idx_base + ic] as i32
+                                                + conv_params.input_offset;
                                             let rhs = kernel[ker_idx_base + ic] as i32;
                                             acc += lhs * rhs;
                                         }
@@ -75,7 +79,8 @@ pub fn convolve_s8(
                         acc += conv_params.output_offset;
                         acc = clamp(acc, conv_params.activation.min, conv_params.activation.max);
 
-                        let out_idx = ((b * output_h + out_y) * output_w + out_x) * output_c + out_c;
+                        let out_idx =
+                            ((b * output_h + out_y) * output_w + out_x) * output_c + out_c;
                         output[out_idx] = acc as i8;
                     }
                 }
@@ -138,14 +143,16 @@ pub fn convolve_per_channel_s8(
                                 for kx in 0..kernel_w {
                                     let in_x = base_x + kx as i32 * conv_params.dilation.w;
                                     if in_x >= 0 && in_x < input_dims.w {
-                                        let in_idx_base =
-                                            ((b * input_h + in_y as usize) * input_w + in_x as usize) * input_c
-                                                + g * kernel_c;
+                                        let in_idx_base = ((b * input_h + in_y as usize) * input_w
+                                            + in_x as usize)
+                                            * input_c
+                                            + g * kernel_c;
                                         let ker_idx_base =
                                             ((out_c * kernel_h + ky) * kernel_w + kx) * kernel_c;
 
                                         for ic in 0..kernel_c {
-                                            let lhs = input[in_idx_base + ic] as i32 + conv_params.input_offset;
+                                            let lhs = input[in_idx_base + ic] as i32
+                                                + conv_params.input_offset;
                                             let rhs = kernel[ker_idx_base + ic] as i32;
                                             acc += lhs * rhs;
                                         }
@@ -161,7 +168,8 @@ pub fn convolve_per_channel_s8(
                         acc += conv_params.output_offset;
                         acc = clamp(acc, conv_params.activation.min, conv_params.activation.max);
 
-                        let out_idx = ((b * output_h + out_y) * output_w + out_x) * output_c + out_c;
+                        let out_idx =
+                            ((b * output_h + out_y) * output_w + out_x) * output_c + out_c;
                         output[out_idx] = acc as i8;
                     }
                 }
@@ -218,8 +226,10 @@ pub fn depthwise_conv_per_channel_s8(
                             for kx in 0..kernel_w {
                                 let in_x = base_x + kx as i32 * dw_params.dilation.w;
                                 if in_x >= 0 && in_x < input_dims.w {
-                                    let in_idx =
-                                        ((b * input_h + in_y as usize) * input_w + in_x as usize) * input_c + in_c;
+                                    let in_idx = ((b * input_h + in_y as usize) * input_w
+                                        + in_x as usize)
+                                        * input_c
+                                        + in_c;
                                     let ker_idx = ((ky * kernel_w + kx) * output_c) + out_c;
 
                                     let lhs = input[in_idx] as i32 + dw_params.input_offset;
@@ -305,13 +315,19 @@ pub fn transpose_conv_s8(
 
                                 for out_c in 0..output_c {
                                     for in_c in 0..input_c {
-                                        let in_idx = ((b * input_h + in_y) * input_w + in_x) * input_c + in_c;
-                                        let ker_idx = ((out_c * kernel_h + ky) * kernel_w + kx) * input_c + in_c;
+                                        let in_idx = ((b * input_h + in_y) * input_w + in_x)
+                                            * input_c
+                                            + in_c;
+                                        let ker_idx = ((out_c * kernel_h + ky) * kernel_w + kx)
+                                            * input_c
+                                            + in_c;
 
                                         let lhs = input[in_idx] as i32 + conv_params.input_offset;
                                         let rhs = kernel[ker_idx] as i32;
 
-                                        let buf_idx = (actual_out_y * output_w + actual_out_x) * output_c + out_c;
+                                        let buf_idx = (actual_out_y * output_w + actual_out_x)
+                                            * output_c
+                                            + out_c;
                                         if buf_idx < accum_buffer.len() {
                                             accum_buffer[buf_idx] += lhs * rhs;
                                         }
@@ -405,17 +421,10 @@ mod tests {
         let quant_params = PerTensorQuantParams::new(1073741824, 0); // 0.5
 
         let input_dims = Dims::new(1, 3, 3, 1);
-        let input = [
-            1i8, 2i8, 3i8,
-            4i8, 5i8, 6i8,
-            7i8, 8i8, 9i8,
-        ];
+        let input = [1i8, 2i8, 3i8, 4i8, 5i8, 6i8, 7i8, 8i8, 9i8];
 
         let filter_dims = Dims::new(1, 2, 2, 1); // 1 out_channel, 2x2 kernel, 1 in_channel
-        let kernel = [
-            1i8, 0i8,
-            0i8, 1i8,
-        ];
+        let kernel = [1i8, 0i8, 0i8, 1i8];
 
         let output_dims = Dims::new(1, 2, 2, 1);
         let mut output = [0i8; 4];

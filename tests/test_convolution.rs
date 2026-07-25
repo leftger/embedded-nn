@@ -4,8 +4,8 @@ use embedded_nn::{
         transpose_conv_s8,
     },
     float_ops::convolve_f32,
-    Activation, ConvParams, Dims, DwConvParams, Error, PerChannelQuantParams,
-    PerTensorQuantParams, Tile,
+    Activation, ConvParams, Dims, DwConvParams, Error, PerChannelQuantParams, PerTensorQuantParams,
+    Tile,
 };
 
 #[test]

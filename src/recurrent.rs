@@ -23,9 +23,9 @@ pub fn lstm_step_s8_s16(
     input: &[i8],
     hidden_state: &mut [i8],
     cell_state: &mut [i16],
-    weight_input: &[i8],   // 4 * hidden_dim x input_dim (i, f, g, o)
-    weight_hidden: &[i8],  // 4 * hidden_dim x hidden_dim (i, f, g, o)
-    bias: &[i32],          // 4 * hidden_dim
+    weight_input: &[i8],  // 4 * hidden_dim x input_dim (i, f, g, o)
+    weight_hidden: &[i8], // 4 * hidden_dim x hidden_dim (i, f, g, o)
+    bias: &[i32],         // 4 * hidden_dim
     gate_params: &LstmGateParams,
     cell_clip: i16,
     output_quant: &PerTensorQuantParams,
@@ -150,10 +150,26 @@ pub fn lstm_step_s16(
             acc_o += h_val * (w_o_h[i] as i64);
         }
 
-        let req_i = requantize((acc_i >> 15) as i32, gate_params.multiplier, gate_params.shift) as i16;
-        let req_f = requantize((acc_f >> 15) as i32, gate_params.multiplier, gate_params.shift) as i16;
-        let req_g = requantize((acc_g >> 15) as i32, gate_params.multiplier, gate_params.shift) as i16;
-        let req_o = requantize((acc_o >> 15) as i32, gate_params.multiplier, gate_params.shift) as i16;
+        let req_i = requantize(
+            (acc_i >> 15) as i32,
+            gate_params.multiplier,
+            gate_params.shift,
+        ) as i16;
+        let req_f = requantize(
+            (acc_f >> 15) as i32,
+            gate_params.multiplier,
+            gate_params.shift,
+        ) as i16;
+        let req_g = requantize(
+            (acc_g >> 15) as i32,
+            gate_params.multiplier,
+            gate_params.shift,
+        ) as i16;
+        let req_o = requantize(
+            (acc_o >> 15) as i32,
+            gate_params.multiplier,
+            gate_params.shift,
+        ) as i16;
 
         let mut gate_i = [0i16];
         let mut gate_f = [0i16];
@@ -292,7 +308,11 @@ pub fn svdf_state_s16_s8(
             acc += vec_dot_s16(st, wt);
         }
 
-        let req = requantize((acc >> 15) as i32, output_quant.multiplier, output_quant.shift);
+        let req = requantize(
+            (acc >> 15) as i32,
+            output_quant.multiplier,
+            output_quant.shift,
+        );
         let final_val = clamp(req + output_offset, activation.min, activation.max);
         output[u] = final_val as i8;
     }

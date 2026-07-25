@@ -3,12 +3,7 @@
 use crate::types::{Dims, Result};
 
 /// Transposes a 2D matrix (rows x cols) for int8 tensors.
-pub fn transpose_2d_s8(
-    rows: usize,
-    cols: usize,
-    input: &[i8],
-    output: &mut [i8],
-) -> Result<()> {
+pub fn transpose_2d_s8(rows: usize, cols: usize, input: &[i8], output: &mut [i8]) -> Result<()> {
     for r in 0..rows {
         for c in 0..cols {
             output[c * rows + r] = input[r * cols + c];
@@ -18,11 +13,7 @@ pub fn transpose_2d_s8(
 }
 
 /// Transposes a 4D tensor (N, H, W, C) -> (N, W, H, C).
-pub fn transpose_spatial_s8(
-    input_dims: &Dims,
-    input: &[i8],
-    output: &mut [i8],
-) -> Result<()> {
+pub fn transpose_spatial_s8(input_dims: &Dims, input: &[i8], output: &mut [i8]) -> Result<()> {
     let batches = input_dims.n as usize;
     let input_h = input_dims.h as usize;
     let input_w = input_dims.w as usize;

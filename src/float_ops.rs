@@ -108,22 +108,24 @@ pub fn convolve_f32(
                                 for kx in 0..kernel_w {
                                     let in_x = base_x + kx as i32 * dilation.w;
                                     if in_x >= 0 && in_x < input_dims.w {
-                                        let in_idx_base =
-                                            ((b * input_h + in_y as usize) * input_w + in_x as usize)
-                                                * input_c
-                                                + g * kernel_c;
+                                        let in_idx_base = ((b * input_h + in_y as usize) * input_w
+                                            + in_x as usize)
+                                            * input_c
+                                            + g * kernel_c;
                                         let ker_idx_base =
                                             ((out_c * kernel_h + ky) * kernel_w + kx) * kernel_c;
 
                                         for ic in 0..kernel_c {
-                                            acc += input[in_idx_base + ic] * kernel[ker_idx_base + ic];
+                                            acc +=
+                                                input[in_idx_base + ic] * kernel[ker_idx_base + ic];
                                         }
                                     }
                                 }
                             }
                         }
 
-                        let out_idx = ((b * output_h + out_y) * output_w + out_x) * output_c + out_c;
+                        let out_idx =
+                            ((b * output_h + out_y) * output_w + out_x) * output_c + out_c;
                         output[out_idx] = acc;
                     }
                 }

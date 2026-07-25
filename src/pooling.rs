@@ -38,7 +38,10 @@ pub fn max_pool_s8(
                             for kx in 0..kernel_w {
                                 let in_x = base_x + kx as i32;
                                 if in_x >= 0 && in_x < input_dims.w {
-                                    let in_idx = ((b * input_h + in_y as usize) * input_w + in_x as usize) * channels + c;
+                                    let in_idx = ((b * input_h + in_y as usize) * input_w
+                                        + in_x as usize)
+                                        * channels
+                                        + c;
                                     let val = input[in_idx] as i32;
                                     if val > max_val {
                                         max_val = val;
@@ -48,7 +51,11 @@ pub fn max_pool_s8(
                         }
                     }
 
-                    max_val = clamp(max_val, pool_params.activation.min, pool_params.activation.max);
+                    max_val = clamp(
+                        max_val,
+                        pool_params.activation.min,
+                        pool_params.activation.max,
+                    );
                     let out_idx = ((b * output_h + out_y) * output_w + out_x) * channels + c;
                     output[out_idx] = max_val as i8;
                 }
@@ -94,7 +101,10 @@ pub fn avg_pool_s8(
                             for kx in 0..kernel_w {
                                 let in_x = base_x + kx as i32;
                                 if in_x >= 0 && in_x < input_dims.w {
-                                    let in_idx = ((b * input_h + in_y as usize) * input_w + in_x as usize) * channels + c;
+                                    let in_idx = ((b * input_h + in_y as usize) * input_w
+                                        + in_x as usize)
+                                        * channels
+                                        + c;
                                     sum += input[in_idx] as i32;
                                     count += 1;
                                 }
@@ -112,7 +122,8 @@ pub fn avg_pool_s8(
                         0
                     };
 
-                    let final_val = clamp(avg, pool_params.activation.min, pool_params.activation.max);
+                    let final_val =
+                        clamp(avg, pool_params.activation.min, pool_params.activation.max);
                     let out_idx = ((b * output_h + out_y) * output_w + out_x) * channels + c;
                     output[out_idx] = final_val as i8;
                 }
@@ -157,7 +168,10 @@ pub fn max_pool_s16(
                             for kx in 0..kernel_w {
                                 let in_x = base_x + kx as i32;
                                 if in_x >= 0 && in_x < input_dims.w {
-                                    let in_idx = ((b * input_h + in_y as usize) * input_w + in_x as usize) * channels + c;
+                                    let in_idx = ((b * input_h + in_y as usize) * input_w
+                                        + in_x as usize)
+                                        * channels
+                                        + c;
                                     let val = input[in_idx] as i32;
                                     if val > max_val {
                                         max_val = val;
@@ -167,7 +181,11 @@ pub fn max_pool_s16(
                         }
                     }
 
-                    max_val = clamp(max_val, pool_params.activation.min, pool_params.activation.max);
+                    max_val = clamp(
+                        max_val,
+                        pool_params.activation.min,
+                        pool_params.activation.max,
+                    );
                     let out_idx = ((b * output_h + out_y) * output_w + out_x) * channels + c;
                     output[out_idx] = max_val as i16;
                 }
@@ -213,7 +231,10 @@ pub fn avg_pool_s16(
                             for kx in 0..kernel_w {
                                 let in_x = base_x + kx as i32;
                                 if in_x >= 0 && in_x < input_dims.w {
-                                    let in_idx = ((b * input_h + in_y as usize) * input_w + in_x as usize) * channels + c;
+                                    let in_idx = ((b * input_h + in_y as usize) * input_w
+                                        + in_x as usize)
+                                        * channels
+                                        + c;
                                     sum += input[in_idx] as i64;
                                     count += 1;
                                 }
@@ -231,7 +252,11 @@ pub fn avg_pool_s16(
                         0
                     };
 
-                    let final_val = clamp(avg as i32, pool_params.activation.min, pool_params.activation.max);
+                    let final_val = clamp(
+                        avg as i32,
+                        pool_params.activation.min,
+                        pool_params.activation.max,
+                    );
                     let out_idx = ((b * output_h + out_y) * output_w + out_x) * channels + c;
                     output[out_idx] = final_val as i16;
                 }
@@ -257,10 +282,7 @@ mod tests {
         let filter_dims = Tile::new(2, 2);
         let input_dims = Dims::new(1, 4, 4, 1);
         let input = [
-            1i8, 2i8, 5i8, 6i8,
-            3i8, 4i8, 7i8, 8i8,
-            9i8, 10i8, 13i8, 14i8,
-            11i8, 12i8, 15i8, 16i8,
+            1i8, 2i8, 5i8, 6i8, 3i8, 4i8, 7i8, 8i8, 9i8, 10i8, 13i8, 14i8, 11i8, 12i8, 15i8, 16i8,
         ];
 
         let output_dims = Dims::new(1, 2, 2, 1);

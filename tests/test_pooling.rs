@@ -14,10 +14,8 @@ fn test_max_pool_s8_variations() {
 
     let input_dims = Dims::new(1, 4, 4, 1);
     let input = [
-        -20i8, -15i8, 5i8, 6i8,
-        -10i8, -5i8, 7i8, 8i8,
-        9i8, 10i8, 13i8, 14i8,
-        11i8, 12i8, 15i8, 16i8,
+        -20i8, -15i8, 5i8, 6i8, -10i8, -5i8, 7i8, 8i8, 9i8, 10i8, 13i8, 14i8, 11i8, 12i8, 15i8,
+        16i8,
     ];
     let output_dims = Dims::new(1, 2, 2, 1);
     let mut output = [0i8; 4];
@@ -49,10 +47,7 @@ fn test_avg_pool_s8_negative_values_and_padding() {
     let filter_dims = Tile::new(3, 3);
 
     let input_dims = Dims::new(1, 2, 2, 1);
-    let input = [
-        -10i8, -20i8,
-        -30i8, -40i8,
-    ];
+    let input = [-10i8, -20i8, -30i8, -40i8];
     let output_dims = Dims::new(1, 2, 2, 1);
     let mut output = [0i8; 4];
 

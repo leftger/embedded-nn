@@ -98,7 +98,11 @@ fn test_sigmoid_s8_full_range() {
 
     // Sigmoid must be strictly monotonic
     for i in 0..output.len() - 1 {
-        assert!(output[i] <= output[i + 1], "Failed monotonicity at index {}", i);
+        assert!(
+            output[i] <= output[i + 1],
+            "Failed monotonicity at index {}",
+            i
+        );
     }
     // Around 0 input, output should be around 0 in centered s8
     assert!((output[4] as i32).abs() <= 5);
@@ -145,7 +149,13 @@ fn test_tanh_s16_shifts() {
         println!("shift={}: {:?}", shift, output);
         // Tanh must be monotonic
         for i in 0..output.len() - 1 {
-            assert!(output[i] <= output[i + 1], "Failed at shift {} index {}: {:?}", shift, i, output);
+            assert!(
+                output[i] <= output[i + 1],
+                "Failed at shift {} index {}: {:?}",
+                shift,
+                i,
+                output
+            );
         }
     }
 }

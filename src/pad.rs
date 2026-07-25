@@ -61,7 +61,16 @@ mod tests {
         let out_dims = Dims::new(1, 4, 4, 1);
         let mut out = [0i8; 16];
 
-        pad_s8(&in_dims, &input, &pad_before, &pad_after, 0i8, &out_dims, &mut out).unwrap();
+        pad_s8(
+            &in_dims,
+            &input,
+            &pad_before,
+            &pad_after,
+            0i8,
+            &out_dims,
+            &mut out,
+        )
+        .unwrap();
 
         // Check center 2x2 elements match input
         assert_eq!(out[5], 1);

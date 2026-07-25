@@ -128,7 +128,11 @@ pub fn fully_connected_s16(
                 acc += lhs * rhs;
             }
 
-            let req = requantize((acc >> 15) as i32, quant_params.multiplier, quant_params.shift);
+            let req = requantize(
+                (acc >> 15) as i32,
+                quant_params.multiplier,
+                quant_params.shift,
+            );
             let final_val = clamp(req, fc_params.activation.min, fc_params.activation.max);
 
             output_batch[out_c] = final_val as i16;
@@ -223,7 +227,11 @@ pub fn batch_matmul_s16(
                     acc += lhs_val * rhs_val;
                 }
 
-                let req = requantize((acc >> 15) as i32, quant_params.multiplier, quant_params.shift);
+                let req = requantize(
+                    (acc >> 15) as i32,
+                    quant_params.multiplier,
+                    quant_params.shift,
+                );
                 let final_val = clamp(req, fc_params.activation.min, fc_params.activation.max);
 
                 let out_idx = (b * rows + i) * cols + j;
