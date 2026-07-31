@@ -122,9 +122,14 @@ impl FusedActivation {
                     Activation::int8_unconstrained()
                 }
             }
-            FusedActivation::Relu => {
-                Activation::new(0, if is_int16 { i16::MAX as i32 } else { i8::MAX as i32 })
-            }
+            FusedActivation::Relu => Activation::new(
+                0,
+                if is_int16 {
+                    i16::MAX as i32
+                } else {
+                    i8::MAX as i32
+                },
+            ),
             FusedActivation::Relu6 => Activation::new(0, 6),
             FusedActivation::LeakyRelu => {
                 if is_int16 {
@@ -187,7 +192,8 @@ impl<'a, T: Copy> TensorView<'a, T> {
         if r < 0 || r >= self.dims.h as isize || c < 0 || c >= self.dims.w as isize {
             pad_value
         } else {
-            let idx = ((batch * self.dims.h as usize + r as usize) * self.dims.w as usize + c as usize)
+            let idx = ((batch * self.dims.h as usize + r as usize) * self.dims.w as usize
+                + c as usize)
                 * self.dims.c as usize
                 + ch;
             if idx < self.data.len() {
@@ -209,10 +215,7 @@ impl<'a, T: Copy> TensorView<'a, T> {
                 if h >= kh { (h - kh) / sh + 1 } else { 0 },
                 if w >= kw { (w - kw) / sw + 1 } else { 0 },
             ),
-            TensorViewPadding::Same => (
-                (h + sh - 1) / sh,
-                (w + sw - 1) / sw,
-            ),
+            TensorViewPadding::Same => ((h + sh - 1) / sh, (w + sw - 1) / sw),
         }
     }
 }
