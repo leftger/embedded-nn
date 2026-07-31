@@ -112,3 +112,44 @@ fn test_reshape_s8_mismatched_size_error() {
     let err = reshape_s8(&in_dims, &input, &out_dims_bad, &mut out);
     assert_eq!(err, Err(Error::ArgumentError));
 }
+
+#[test]
+fn test_tensor_view_spatial_indexing_and_padding() {
+    use embedded_nn::{TensorView, TensorViewPadding};
+
+    let dims = Dims::new(1, 2, 2, 1);
+    let input = [10i8, 20i8, 30i8, 40i8];
+    let view = TensorView::new(
+        &input,
+        dims,
+        TensorViewPadding::Same,
+        Tile::new(1, 1),
+        Tile::new(3, 3),
+    );
+
+    // Test inside bounds
+    assert_eq!(view.get_or_pad(0, 0, 0, 0, 0), 10);
+    assert_eq!(view.get_or_pad(0, 1, 1, 0, 0), 40);
+
+    // Test padded out-of-bounds
+    assert_eq!(view.get_or_pad(0, -1, 0, 0, -1), -1);
+    assert_eq!(view.get_or_pad(0, 2, 0, 0, 0), 0);
+
+    let (oh, ow) = view.output_spatial_dims();
+    assert_eq!((oh, ow), (2, 2));
+}
+
+#[test]
+fn test_fused_activation_mapping() {
+    use embedded_nn::FusedActivation;
+
+    let relu = FusedActivation::Relu;
+    let act_s8 = relu.to_activation(false);
+    assert_eq!(act_s8.min, 0);
+    assert_eq!(act_s8.max, 127);
+
+    let relu6 = FusedActivation::Relu6;
+    let act_r6 = relu6.to_activation(false);
+    assert_eq!(act_r6.min, 0);
+    assert_eq!(act_r6.max, 6);
+}

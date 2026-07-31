@@ -42,12 +42,14 @@ pub mod transpose;
 pub mod types;
 
 pub use support::{
-    clamp, divide_by_power_of_two, doubling_high_mult_no_sat, pack_q15x2_32x1, pack_s8x4_32x1,
-    requantize, requantize_s64,
+    clamp, dequantize_s16_to_f32, dequantize_s8_to_f32, divide_by_power_of_two,
+    doubling_high_mult_no_sat, pack_q15x2_32x1, pack_s8x4_32x1, quantize_f32_to_s16,
+    quantize_f32_to_s8, requantize, requantize_s64,
 };
 pub use types::{
-    Activation, Context, ConvParams, Dims, DwConvParams, Error, FcParams, PerChannelQuantParams,
-    PerTensorQuantParams, PoolParams, QuantParams, Result, SoftmaxParams, Tile,
+    Activation, Context, ConvParams, Dims, DwConvParams, Error, FcParams, FusedActivation,
+    PerChannelQuantParams, PerTensorQuantParams, PoolParams, QuantParams, Result, SoftmaxParams,
+    TensorView, TensorViewPadding, Tile,
 };
 
 pub use convolution::{convolve_1_x_n_s8, transpose_conv_s8};

@@ -90,6 +90,58 @@ pub const fn pack_q15x2_32x1(v0: i16, v1: i16) -> i32 {
     ((v0 as u16 as i32) & 0xFFFF) | ((v1 as u16 as i32) << 16)
 }
 
+/// Quantizes a 32-bit floating point value into an 8-bit signed integer (`s8`) given scale and zero point.
+///
+/// Formula: `clamp(round(val / scale) + zero_point, -128, 127)`
+#[inline]
+pub fn quantize_f32_to_s8(val: f32, scale: f32, zero_point: i32) -> i8 {
+    if scale == 0.0 {
+        return zero_point as i8;
+    }
+    let scaled = val / scale;
+    let rounded = if scaled >= 0.0 {
+        (scaled + 0.5) as i32
+    } else {
+        (scaled - 0.5) as i32
+    };
+    let q = rounded + zero_point;
+    clamp(q, i8::MIN as i32, i8::MAX as i32) as i8
+}
+
+/// Dequantizes an 8-bit signed integer (`s8`) into a 32-bit floating point value given scale and zero point.
+///
+/// Formula: `scale * (val - zero_point)`
+#[inline]
+pub fn dequantize_s8_to_f32(val: i8, scale: f32, zero_point: i32) -> f32 {
+    scale * ((val as i32 - zero_point) as f32)
+}
+
+/// Quantizes a 32-bit floating point value into a 16-bit signed integer (`s16`) given scale and zero point.
+///
+/// Formula: `clamp(round(val / scale) + zero_point, -32768, 32767)`
+#[inline]
+pub fn quantize_f32_to_s16(val: f32, scale: f32, zero_point: i32) -> i16 {
+    if scale == 0.0 {
+        return zero_point as i16;
+    }
+    let scaled = val / scale;
+    let rounded = if scaled >= 0.0 {
+        (scaled + 0.5) as i32
+    } else {
+        (scaled - 0.5) as i32
+    };
+    let q = rounded + zero_point;
+    clamp(q, i16::MIN as i32, i16::MAX as i32) as i16
+}
+
+/// Dequantizes a 16-bit signed integer (`s16`) into a 32-bit floating point value given scale and zero point.
+///
+/// Formula: `scale * (val - zero_point)`
+#[inline]
+pub fn dequantize_s16_to_f32(val: i16, scale: f32, zero_point: i32) -> f32 {
+    scale * ((val as i32 - zero_point) as f32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +172,25 @@ mod tests {
         let shift = -1;
         let res = requantize(val, mult, shift);
         assert_eq!(res, 250);
+    }
+
+    #[test]
+    fn test_quantize_dequantize_s8() {
+        let scale = 0.1;
+        let zero_point = 2;
+        let q = quantize_f32_to_s8(1.0, scale, zero_point);
+        assert_eq!(q, 12);
+        let f = dequantize_s8_to_f32(q, scale, zero_point);
+        assert!((f - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_quantize_dequantize_s16() {
+        let scale = 0.05;
+        let zero_point = -10;
+        let q = quantize_f32_to_s16(2.5, scale, zero_point);
+        assert_eq!(q, 40);
+        let f = dequantize_s16_to_f32(q, scale, zero_point);
+        assert!((f - 2.5).abs() < 1e-5);
     }
 }
