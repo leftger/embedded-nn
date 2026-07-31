@@ -12,7 +12,7 @@
 //! - [`fully_connected`]: Fully Connected (Linear / Dense) layers and Batch Matrix Multiplication (`BatchMatMul`).
 //! - [`pooling`]: Max Pooling, Average Pooling.
 //! - [`softmax`]: Softmax activation.
-//! - [`concat`]: Depthwise concatenation.
+//! - [`mod@concat`]: Depthwise concatenation.
 //! - [`pad`]: Tensor padding.
 //! - [`transpose`]: Matrix and spatial transposition.
 //! - [`reshape`]: Reshaping operations.
