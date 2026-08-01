@@ -11,11 +11,13 @@ keywords = ["no-std", "embedded", "cmsis-nn", "neural-network", "quantization"]
 categories = ["embedded", "science", "no-std"]
 
 [features]
-default = []
+default = ["libm"]
 alloc = []
 float = []
 simd = []
+libm = ["dep:libm"]
 
 [dependencies]
+libm = { version = "0.2.11", optional = true }
 
 [dev-dependencies]

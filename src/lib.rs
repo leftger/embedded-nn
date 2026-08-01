@@ -30,6 +30,8 @@ pub mod concat;
 pub mod convolution;
 pub mod float_ops;
 pub mod fully_connected;
+#[cfg(feature = "libm")]
+pub mod ml;
 pub mod pad;
 pub mod pooling;
 pub mod recurrent;
@@ -40,6 +42,12 @@ pub mod subbyte;
 pub mod support;
 pub mod transpose;
 pub mod types;
+
+#[cfg(feature = "libm")]
+pub use ml::{
+    hz_to_mel, mel_filterbank_f32, mel_to_hz, mfcc_f32, GaussianNaiveBayesInstanceF32,
+    SvmInstanceF32, SvmKernelType,
+};
 
 pub use support::{
     clamp, dequantize_s16_to_f32, dequantize_s8_to_f32, divide_by_power_of_two,
