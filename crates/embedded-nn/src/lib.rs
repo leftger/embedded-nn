@@ -23,6 +23,19 @@
 
 #![no_std]
 #![deny(missing_docs)]
+#![allow(
+    clippy::too_many_arguments,
+    clippy::excessive_precision,
+    clippy::approx_constant,
+    clippy::identity_op,
+    clippy::erasing_op,
+    clippy::manual_div_ceil,
+    clippy::manual_clamp,
+    clippy::needless_range_loop,
+    clippy::unnecessary_cast,
+    clippy::manual_is_multiple_of,
+    clippy::explicit_counter_loop
+)]
 
 pub mod activations;
 pub mod basic_math;

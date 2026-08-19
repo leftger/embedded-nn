@@ -1,3 +1,8 @@
+#![allow(
+    clippy::approx_constant,
+    clippy::excessive_precision,
+    clippy::identity_op
+)]
 use embedded_nn::{
     Activation,
     basic_math::{
