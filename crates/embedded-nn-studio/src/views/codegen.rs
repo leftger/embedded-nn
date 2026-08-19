@@ -1,4 +1,5 @@
 use crate::state::StudioState;
+use crate::syntax::highlight_rust;
 use eframe::egui;
 
 #[derive(Default)]
@@ -144,10 +145,16 @@ impl CodegenView {
                     });
             });
 
-            // Right Column: Generated #![no_std] Rust Source Code
+            // Right Column: Generated #![no_std] Rust Source Code with Syntax Highlighting
             cols[1].group(|ui| {
                 ui.label("📄 Generated #![no_std] Rust Module");
                 ui.separator();
+
+                let mut layouter = |ui: &egui::Ui, text: &str, wrap_width: f32| {
+                    let mut layout_job = highlight_rust(ui.ctx(), text);
+                    layout_job.wrap.max_width = wrap_width;
+                    ui.fonts(|f| f.layout_job(layout_job))
+                };
 
                 egui::ScrollArea::vertical()
                     .id_salt("codegen_rust_code_scroll")
@@ -156,7 +163,7 @@ impl CodegenView {
                         ui.add(
                             egui::TextEdit::multiline(&mut state.generated_rust_code)
                                 .font(egui::TextStyle::Monospace)
-                                .code_editor()
+                                .layouter(&mut layouter)
                                 .lock_focus(true)
                                 .desired_width(f32::INFINITY),
                         );

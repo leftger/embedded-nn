@@ -1,5 +1,6 @@
 mod app;
 mod state;
+mod syntax;
 mod theme;
 mod views;
 
