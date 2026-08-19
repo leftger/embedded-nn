@@ -124,15 +124,18 @@ impl CodegenView {
                 ui.separator();
                 ui.label("Input Feature Sliders (Int8 quantized):");
                 egui::ScrollArea::vertical()
+                    .id_salt("codegen_feature_sliders_scroll")
                     .max_height(140.0)
                     .show(ui, |ui| {
                         let mut changed = false;
                         for (i, val) in state.test_input_vector.iter_mut().enumerate() {
-                            ui.horizontal(|ui| {
-                                ui.label(format!("Bin {:02}:", i));
-                                if ui.add(egui::Slider::new(val, -128..=127)).changed() {
-                                    changed = true;
-                                }
+                            ui.push_id(i, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("Bin {:02}:", i));
+                                    if ui.add(egui::Slider::new(val, -128..=127)).changed() {
+                                        changed = true;
+                                    }
+                                });
                             });
                         }
                         if changed {
@@ -147,6 +150,7 @@ impl CodegenView {
                 ui.separator();
 
                 egui::ScrollArea::vertical()
+                    .id_salt("codegen_rust_code_scroll")
                     .max_height(340.0)
                     .show(ui, |ui| {
                         ui.add(

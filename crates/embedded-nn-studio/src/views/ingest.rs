@@ -245,6 +245,7 @@ impl IngestView {
             ui.separator();
 
             egui::ScrollArea::vertical()
+                .id_salt("ingest_samples_scroll_area")
                 .max_height(160.0)
                 .show(ui, |ui| {
                     egui::Grid::new("dataset_samples_grid")
@@ -268,9 +269,11 @@ impl IngestView {
                                 ui.label(format!("{} samples", sample.raw_waveform.len()));
                                 ui.label(format!("{} Mel bins", sample.features.len()));
 
-                                if ui.button("🗑 Delete").clicked() {
-                                    delete_id = Some(sample.id);
-                                }
+                                ui.push_id(sample.id, |ui| {
+                                    if ui.button("🗑 Delete").clicked() {
+                                        delete_id = Some(sample.id);
+                                    }
+                                });
                                 ui.end_row();
                             }
 
