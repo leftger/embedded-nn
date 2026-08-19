@@ -6,6 +6,7 @@ use crate::views::dsp::DspView;
 use crate::views::ingest::IngestView;
 use crate::views::train::TrainView;
 use eframe::egui;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StudioTab {
@@ -92,9 +93,12 @@ impl eframe::App for EmbeddedNnStudioApp {
             StudioTab::Codegen => self.codegen_view.show(ui, &mut self.state),
         });
 
-        // Request continuous frame redraw when recording or training is actively running
-        if self.ingest_view.is_recording || self.state.is_training {
-            ctx.request_repaint();
+        // Request continuous repaint for smooth 60 FPS live oscilloscope stream and training progress
+        if self.current_tab == StudioTab::Ingest
+            || self.state.is_training
+            || self.ingest_view.is_recording
+        {
+            ctx.request_repaint_after(Duration::from_millis(16));
         }
     }
 }
