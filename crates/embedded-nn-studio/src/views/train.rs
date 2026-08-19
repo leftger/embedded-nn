@@ -1,135 +1,327 @@
+use crate::state::{ModelArchitecture, QuantizationMode, StudioState};
 use eframe::egui;
 
 #[derive(Default)]
-pub struct TrainView {
-    pub model_arch: String,
-    pub quant_mode: String,
-    pub epochs: u32,
-    pub learning_rate: f32,
-    pub is_training: bool,
-    pub current_epoch: u32,
-    pub current_loss: f32,
-    pub current_acc: f32,
-    pub loss_history: Vec<f32>,
-}
+pub struct TrainView;
 
 impl TrainView {
     pub fn new() -> Self {
-        Self {
-            model_arch: "TinyConv1D (IMU Gestures)".into(),
-            quant_mode: "s4 (4-bit sub-byte packed)".into(),
-            epochs: 40,
-            learning_rate: 0.005,
-            is_training: false,
-            current_epoch: 40,
-            current_loss: 0.042,
-            current_acc: 98.4,
-            loss_history: vec![0.85, 0.62, 0.45, 0.31, 0.22, 0.15, 0.09, 0.06, 0.042],
-        }
+        Self
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui) {
-        ui.heading("3. Model Design, Burn Training & QAT Quantization");
-        ui.add_space(8.0);
-
+    pub fn show(&mut self, ui: &mut egui::Ui, state: &mut StudioState) {
         ui.horizontal(|ui| {
-            ui.label("Architecture:");
-            egui::ComboBox::from_id_salt("train_arch_combo")
-                .selected_text(&self.model_arch)
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.model_arch,
-                        "TinyConv1D (IMU Gestures)".into(),
-                        "TinyConv1D (IMU Gestures)",
-                    );
-                    ui.selectable_value(
-                        &mut self.model_arch,
-                        "DenseMLP (Tabular/Sensor)".into(),
-                        "DenseMLP (Tabular/Sensor)",
-                    );
-                    ui.selectable_value(
-                        &mut self.model_arch,
-                        "TinyLSTM (Time-Series)".into(),
-                        "TinyLSTM (Time-Series)",
-                    );
-                });
-
-            ui.label("Target Quantization:");
-            egui::ComboBox::from_id_salt("train_quant_combo")
-                .selected_text(&self.quant_mode)
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.quant_mode,
-                        "s4 (4-bit sub-byte packed)".into(),
-                        "s4 (4-bit sub-byte packed)",
-                    );
-                    ui.selectable_value(
-                        &mut self.quant_mode,
-                        "s8 (8-bit fixed-point)".into(),
-                        "s8 (8-bit fixed-point)",
-                    );
-                    ui.selectable_value(
-                        &mut self.quant_mode,
-                        "s16 (16-bit high-precision)".into(),
-                        "s16 (16-bit high-precision)",
-                    );
-                });
-        });
-
-        ui.add_space(6.0);
-
-        ui.horizontal(|ui| {
-            ui.label("Epochs:");
-            ui.add(egui::DragValue::new(&mut self.epochs).range(1..=500));
-
-            ui.label("Learning Rate:");
-            ui.add(egui::DragValue::new(&mut self.learning_rate).speed(0.001));
-
-            let train_text = if self.is_training {
-                "⏹ Stop Training"
-            } else {
-                "▶ Start Burn QAT Training"
-            };
-            if ui.button(train_text).clicked() {
-                self.is_training = !self.is_training;
-            }
-        });
-
-        ui.add_space(10.0);
-        ui.separator();
-
-        ui.horizontal(|ui| {
-            ui.label(format!(
-                "Status: Epoch {}/{}",
-                self.current_epoch, self.epochs
-            ));
-            ui.label(format!("Loss: {:.4}", self.current_loss));
-            ui.label(format!("Val Accuracy: {:.1}%", self.current_acc));
-        });
-
-        ui.add_space(8.0);
-        ui.label("Training Loss Convergence:");
-
-        let (rect, _response) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), 140.0),
-            egui::Sense::hover(),
-        );
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(20, 24, 30));
-
-        let num_points = self.loss_history.len();
-        if num_points > 1 {
-            let dx = rect.width() / (num_points - 1) as f32;
-            for i in 0..num_points - 1 {
-                let y1 = rect.bottom() - 10.0 - self.loss_history[i] * (rect.height() - 20.0);
-                let y2 = rect.bottom() - 10.0 - self.loss_history[i + 1] * (rect.height() - 20.0);
-                let p1 = egui::pos2(rect.left() + (i as f32) * dx, y1);
-                let p2 = egui::pos2(rect.left() + ((i + 1) as f32) * dx, y2);
-                painter.line_segment(
-                    [p1, p2],
-                    egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(240, 160, 60)),
+            ui.heading("🧠 3. Model Architecture, Burn QAT Training & Quantization");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let latest_acc = state.val_acc_history.last().copied().unwrap_or(0.0);
+                ui.colored_label(
+                    if latest_acc > 90.0 {
+                        egui::Color32::from_rgb(80, 220, 120)
+                    } else {
+                        egui::Color32::from_rgb(240, 180, 60)
+                    },
+                    format!(
+                        "Accuracy: {:.1}% | Epoch: {}/{}",
+                        latest_acc, state.current_epoch, state.model_config.epochs
+                    ),
                 );
-            }
+            });
+        });
+
+        ui.add_space(4.0);
+        ui.label(
+            "Configure lightweight TinyML model topologies, simulate Quantization-Aware Training (QAT) with sub-byte s4/s8 fixed-point math, and inspect convergence metrics & confusion matrices.",
+        );
+        ui.add_space(8.0);
+
+        let mut config_changed = false;
+
+        // Model Config Controls
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Architecture:");
+                let prev_arch = state.model_config.arch;
+                egui::ComboBox::from_id_salt("train_arch_type_combo")
+                    .selected_text(match state.model_config.arch {
+                        ModelArchitecture::DenseMLP => "Dense MLP (Tabular/Sensor)",
+                        ModelArchitecture::TinyConv1D => "TinyConv1D (Temporal Patterns)",
+                        ModelArchitecture::RecurrentSVDF => "Recurrent SVDF / LSTM",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut state.model_config.arch,
+                            ModelArchitecture::DenseMLP,
+                            "Dense MLP (Tabular/Sensor)",
+                        );
+                        ui.selectable_value(
+                            &mut state.model_config.arch,
+                            ModelArchitecture::TinyConv1D,
+                            "TinyConv1D (Temporal Patterns)",
+                        );
+                        ui.selectable_value(
+                            &mut state.model_config.arch,
+                            ModelArchitecture::RecurrentSVDF,
+                            "Recurrent SVDF / LSTM",
+                        );
+                    });
+                if state.model_config.arch != prev_arch {
+                    config_changed = true;
+                }
+
+                ui.separator();
+
+                ui.label("Hidden Units:");
+                let prev_hidden = state.model_config.hidden_units;
+                egui::ComboBox::from_id_salt("train_hidden_units_combo")
+                    .selected_text(format!("{} units", state.model_config.hidden_units))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut state.model_config.hidden_units,
+                            8,
+                            "8 units (Ultra-lean)",
+                        );
+                        ui.selectable_value(
+                            &mut state.model_config.hidden_units,
+                            16,
+                            "16 units (Balanced)",
+                        );
+                        ui.selectable_value(
+                            &mut state.model_config.hidden_units,
+                            32,
+                            "32 units (Higher Capacity)",
+                        );
+                    });
+                if state.model_config.hidden_units != prev_hidden {
+                    config_changed = true;
+                }
+
+                ui.separator();
+
+                ui.label("Target Quantization:");
+                let prev_q = state.model_config.quant_mode;
+                egui::ComboBox::from_id_salt("train_quant_type_combo")
+                    .selected_text(match state.model_config.quant_mode {
+                        QuantizationMode::Int4SubByte => "s4 (4-bit sub-byte packed, 50% Flash)",
+                        QuantizationMode::Int8FixedPoint => "s8 (8-bit fixed-point CMSIS-NN)",
+                        QuantizationMode::Int16HighPrecision => "s16 (16-bit high-precision)",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut state.model_config.quant_mode,
+                            QuantizationMode::Int4SubByte,
+                            "s4 (4-bit sub-byte packed, 50% Flash)",
+                        );
+                        ui.selectable_value(
+                            &mut state.model_config.quant_mode,
+                            QuantizationMode::Int8FixedPoint,
+                            "s8 (8-bit fixed-point CMSIS-NN)",
+                        );
+                        ui.selectable_value(
+                            &mut state.model_config.quant_mode,
+                            QuantizationMode::Int16HighPrecision,
+                            "s16 (16-bit high-precision)",
+                        );
+                    });
+                if state.model_config.quant_mode != prev_q {
+                    config_changed = true;
+                }
+            });
+
+            ui.add_space(4.0);
+
+            ui.horizontal(|ui| {
+                ui.label("Epochs:");
+                ui.add(egui::DragValue::new(&mut state.model_config.epochs).range(10..=300));
+
+                ui.separator();
+
+                ui.label("Learning Rate:");
+                ui.add(
+                    egui::DragValue::new(&mut state.model_config.learning_rate)
+                        .speed(0.002)
+                        .range(0.001..=0.1),
+                );
+
+                ui.separator();
+
+                let train_btn = if state.is_training {
+                    egui::Button::new("⏸ Pause").fill(egui::Color32::from_rgb(160, 100, 40))
+                } else {
+                    egui::Button::new("▶ Run Training").fill(egui::Color32::from_rgb(40, 130, 70))
+                };
+                if ui.add(train_btn).clicked() {
+                    state.is_training = !state.is_training;
+                }
+
+                if ui.button("⏭ Step 10 Epochs").clicked() {
+                    state.run_simulated_training(10);
+                    state.rebuild_model_graph_and_codegen();
+                }
+
+                if ui.button("🔄 Reset Weights").clicked() {
+                    state.reset_training();
+                    state.rebuild_model_graph_and_codegen();
+                }
+            });
+        });
+
+        if config_changed {
+            state.reset_training();
+            state.run_simulated_training(30);
+            state.rebuild_model_graph_and_codegen();
         }
+
+        // Advance training if active
+        if state.is_training {
+            state.step_training_epoch();
+            state.rebuild_model_graph_and_codegen();
+        }
+
+        ui.add_space(8.0);
+
+        // Loss/Accuracy Plots & Confusion Matrix
+        ui.columns(2, |cols| {
+            // Left Column: Loss & Accuracy Curves
+            cols[0].group(|ui| {
+                ui.label("📉 Convergence Metrics (Training Loss & Accuracy)");
+
+                let (rect, _resp) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 160.0),
+                    egui::Sense::hover(),
+                );
+                let painter = ui.painter_at(rect);
+                painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(16, 20, 28));
+
+                // Draw background grid lines
+                for y_ratio in [0.25, 0.5, 0.75] {
+                    let y = rect.top() + y_ratio * rect.height();
+                    painter.line_segment(
+                        [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                        egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(26, 32, 44)),
+                    );
+                }
+
+                // Plot Loss Curve (Orange)
+                let n_loss = state.train_loss_history.len();
+                if n_loss > 1 {
+                    let max_loss = state
+                        .train_loss_history
+                        .first()
+                        .copied()
+                        .unwrap_or(1.0)
+                        .max(1.0);
+                    let dx = rect.width() / (n_loss - 1) as f32;
+                    for i in 0..n_loss - 1 {
+                        let l1 = (state.train_loss_history[i] / max_loss).clamp(0.0, 1.0);
+                        let l2 = (state.train_loss_history[i + 1] / max_loss).clamp(0.0, 1.0);
+                        let p1 = egui::pos2(
+                            rect.left() + i as f32 * dx,
+                            rect.bottom() - 10.0 - l1 * (rect.height() - 20.0),
+                        );
+                        let p2 = egui::pos2(
+                            rect.left() + (i + 1) as f32 * dx,
+                            rect.bottom() - 10.0 - l2 * (rect.height() - 20.0),
+                        );
+                        painter.line_segment(
+                            [p1, p2],
+                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(240, 160, 50)),
+                        );
+                    }
+                }
+
+                // Plot Accuracy Curve (Green)
+                let n_acc = state.val_acc_history.len();
+                if n_acc > 1 {
+                    let dx = rect.width() / (n_acc - 1) as f32;
+                    for i in 0..n_acc - 1 {
+                        let a1 = state.val_acc_history[i] / 100.0;
+                        let a2 = state.val_acc_history[i + 1] / 100.0;
+                        let p1 = egui::pos2(
+                            rect.left() + i as f32 * dx,
+                            rect.bottom() - 10.0 - a1 * (rect.height() - 20.0),
+                        );
+                        let p2 = egui::pos2(
+                            rect.left() + (i + 1) as f32 * dx,
+                            rect.bottom() - 10.0 - a2 * (rect.height() - 20.0),
+                        );
+                        painter.line_segment(
+                            [p1, p2],
+                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(70, 210, 120)),
+                        );
+                    }
+                }
+
+                ui.horizontal(|ui| {
+                    ui.colored_label(egui::Color32::from_rgb(240, 160, 50), "— Loss");
+                    ui.colored_label(egui::Color32::from_rgb(70, 210, 120), "— Accuracy");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let loss_val = state.train_loss_history.last().copied().unwrap_or(0.0);
+                        ui.label(format!("Final Loss: {:.4}", loss_val));
+                    });
+                });
+            });
+
+            // Right Column: Confusion Matrix Heatmap
+            cols[1].group(|ui| {
+                ui.label("🎯 Multi-Class Confusion Matrix");
+
+                let num_classes = state.classes.len();
+                let (rect, _resp) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 160.0),
+                    egui::Sense::hover(),
+                );
+                let painter = ui.painter_at(rect);
+                painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(16, 20, 28));
+
+                if num_classes > 0 {
+                    let cell_w = rect.width() / num_classes as f32;
+                    let cell_h = rect.height() / num_classes as f32;
+
+                    for r in 0..num_classes {
+                        for c in 0..num_classes {
+                            let count = state
+                                .confusion_matrix
+                                .get(r)
+                                .and_then(|row| row.get(c))
+                                .copied()
+                                .unwrap_or(0);
+                            let cell_rect = egui::Rect::from_min_size(
+                                egui::pos2(
+                                    rect.left() + c as f32 * cell_w + 1.0,
+                                    rect.top() + r as f32 * cell_h + 1.0,
+                                ),
+                                egui::vec2(cell_w - 2.0, cell_h - 2.0),
+                            );
+
+                            let col = if r == c {
+                                // Diagonal: correct predictions (green)
+                                let intensity = ((count as f32 * 12.0).clamp(40.0, 220.0)) as u8;
+                                egui::Color32::from_rgb(20, intensity, 40)
+                            } else {
+                                // Off-diagonal: errors (red / neutral)
+                                if count > 0 {
+                                    egui::Color32::from_rgb(160, 40, 40)
+                                } else {
+                                    egui::Color32::from_rgb(22, 28, 38)
+                                }
+                            };
+
+                            painter.rect_filled(cell_rect, 2.0, col);
+                            painter.text(
+                                cell_rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                format!("{}", count),
+                                egui::FontId::proportional(12.0),
+                                egui::Color32::WHITE,
+                            );
+                        }
+                    }
+                }
+
+                ui.horizontal(|ui| {
+                    ui.label("Rows = Ground Truth | Columns = Predicted");
+                });
+            });
+        });
     }
 }
