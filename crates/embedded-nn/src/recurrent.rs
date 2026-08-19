@@ -1,7 +1,7 @@
 //! Advanced recurrent neural network layers (LSTM, SVDF).
 
 use crate::activations::{sigmoid_s16, tanh_s16};
-use crate::simd::{vec_dot_s16, vec_dot_s8};
+use crate::simd::{vec_dot_s8, vec_dot_s16};
 use crate::support::{clamp, requantize};
 use crate::types::{Activation, PerTensorQuantParams, Result};
 

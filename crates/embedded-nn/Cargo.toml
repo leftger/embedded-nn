@@ -1,0 +1,23 @@
+[package]
+name = "embedded-nn"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A pure Rust, #![no_std] neural network inference library inspired by CMSIS-NN for microcontrollers and embedded targets."
+readme = "README.md"
+keywords = ["no-std", "embedded", "cmsis-nn", "neural-network", "quantization"]
+categories = ["embedded", "science", "no-std"]
+
+[features]
+default = ["libm"]
+alloc = []
+float = []
+simd = []
+libm = ["dep:libm"]
+
+[dependencies]
+libm = { workspace = true, optional = true }
+
+[dev-dependencies]

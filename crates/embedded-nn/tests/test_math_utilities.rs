@@ -1,9 +1,8 @@
 use embedded_nn::{
-    pack_q15x2_32x1, pack_s8x4_32x1, requantize_s64,
-    simd::{vec_dot_s16, vec_dot_s8},
-    support::{clamp, divide_by_power_of_two, doubling_high_mult_no_sat, requantize},
     Activation, Context, Dims, Error, PerChannelQuantParams, PerTensorQuantParams, QuantParams,
-    Tile,
+    Tile, pack_q15x2_32x1, pack_s8x4_32x1, requantize_s64,
+    simd::{vec_dot_s8, vec_dot_s16},
+    support::{clamp, divide_by_power_of_two, doubling_high_mult_no_sat, requantize},
 };
 
 #[test]

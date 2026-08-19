@@ -1,0 +1,16 @@
+[package]
+name = "embedded-nn-compiler"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Graph IR, Static Memory Arena Planner & Model Compiler for embedded-nn"
+
+[dependencies]
+embedded-nn = { workspace = true, features = ["alloc", "float"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]

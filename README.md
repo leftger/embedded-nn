@@ -5,99 +5,73 @@
 [![CI](https://github.com/leftger/embedded-nn/actions/workflows/ci.yml/badge.svg)](https://github.com/leftger/embedded-nn/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 
-A pure Rust, `#![no_std]` neural network inference library for microcontrollers and embedded targets, ported from and inspired by ARM's **CMSIS-NN** and **TensorFlow Lite Micro**.
+A pure Rust, `#![no_std]` neural network inference runtime, compiler, and TinyML platform for microcontrollers and embedded targets, ported from and inspired by ARM's **CMSIS-NN**, **TensorFlow Lite Micro**, and **MicroFlow**.
 
-## Features
+📖 **[Read the End-to-End TinyML Guide (Data Collection -> Training -> Deployment)](docs/END_TO_END_TINYML_GUIDE.md)**
 
-- **`#![no_std]` Bare-Metal Support**: Built for bare-metal targets (ARM Cortex-M, RISC-V, ESP32, etc.) with zero required heap allocations (`alloc`).
+---
+
+## Workspace Crates
+
+| Crate | Description |
+| :--- | :--- |
+| [`crates/embedded-nn`](crates/embedded-nn) | Core `#![no_std]` runtime & quantized neural kernels (`s8`, `s16`, `s4` sub-byte). |
+| [`crates/embedded-nn-compiler`](crates/embedded-nn-compiler) | Model graph IR, Ahead-of-Time static SRAM arena scheduler, and PTQ/QAT quantizer. |
+| [`crates/embedded-nn-codegen`](crates/embedded-nn-codegen) | Zero-allocation `#![no_std]` Rust code & static const weight array emitter. |
+| [`crates/embedded-nn-macros`](crates/embedded-nn-macros) | Procedural macro `#[embedded_nn_model("...")]` for compile-time model embedding. |
+| [`crates/embedded-nn-live`](crates/embedded-nn-live) | USB (`nusb`) streaming telemetry & Hardware-in-the-Loop (HIL) verification protocol. |
+| [`crates/embedded-nn-cli`](crates/embedded-nn-cli) | `enn` CLI tool for static memory profiling, codegen, and device discovery. |
+| [`crates/embedded-nn-studio`](crates/embedded-nn-studio) | Interactive `eframe`/`egui` desktop TinyML Studio (Ingest -> DSP -> Train -> Arena -> Deploy). |
+
+---
+
+## Key Features
+
+- **`#![no_std]` Bare-Metal Support**: Built for bare-metal targets (ARM Cortex-M, RISC-V, ESP32) with **zero dynamic heap allocations (`alloc`)**.
+- **Static Arena Memory Scheduler**: Computes tensor birth/death intervals to reuse SRAM memory buffers ahead of time, minimizing peak SRAM footprint.
+- **4-Bit Sub-Byte (`s4`) Quantization**: Pack two signed 4-bit weights into a single byte for 50% Flash savings (`fully_connected_s4`, `convolve_s4`).
 - **Target SIMD Hooks**: Vectorized 4-way and 8-way dot-product abstractions (`vec_dot_s8`, `vec_dot_s16`) optimized for compiler auto-vectorization and hardware SIMD acceleration.
-- **Quantization Support**:
-  - `int8` (s8) and `int16` (s16) per-tensor and per-channel fixed-point quantization (`requantize`, `quantize_f32_to_s8`, `dequantize_s8_to_f32`).
-  - `int4` (`s4`) 4-bit sub-byte quantization (packed nibbles for sub-byte weight compression).
-- **Recurrent Operators**: Unidirectional `LSTM` cell (`lstm_step_s8_s16`) and `SVDF` (Singular Value Decomposition Filter) layer.
-- **Float Fallback Operations**: IEEE-754 `f16` half-precision conversions (`f16_to_f32`, `f32_to_f16`), `f32` convolution, dense, and softmax layers.
 - **Core Neural Operators**:
   - **Convolution**: 2D Conv (`s8`, `s4`, `f32`), 1x1 Fast Conv, Depthwise Conv.
   - **Dense / Fully Connected**: Matrix multiplication (`s8`, `s16`, `s4`, `f32`).
   - **Activations**: ReLU, ReLU6, LeakyReLU, Sigmoid, Tanh, `FusedActivation` enum.
   - **Pooling**: Max Pooling 2D, Average Pooling 2D (`s8`, `s16`).
   - **Softmax**: Fixed-point exponential Softmax (`s8`, `s16`) & float Softmax (`f32`).
-  - **Utilities**: `TensorView` spatial windowing with `TensorViewPadding` (`Same`, `Valid`), Depthwise concatenation, Padding, Transposition, Reshaping.
+  - **Recurrent**: Unidirectional `LSTM` cell (`lstm_step_s8_s16`) and `SVDF` layer.
 
 ---
 
-## Quick Example: 4-Bit Sub-Byte (`s4`) Fully Connected Layer
+## Quickstart
 
+### 1. Compile-Time Model Embedding
 ```rust
-use embedded_nn::{
-    fully_connected_s4, pack_s4_pair, Activation, Dims, FcParams, PerTensorQuantParams,
-};
+use embedded_nn_macros::embedded_nn_model;
 
-fn run_s4_inference() {
-    let fc_params = FcParams {
-        input_offset: 0,
-        filter_offset: 0,
-        output_offset: 0,
-        activation: Activation::int8_unconstrained(),
-    };
+#[embedded_nn_model("models/gesture_classifier.json")]
+pub struct GestureClassifier;
 
-    let quant_params = PerTensorQuantParams::new(1073741824, 0); // 0.5 multiplier
-
-    let input_dims = Dims::new(1, 1, 1, 2);
-    let input = [4i8, 6i8];
-
-    let filter_dims = Dims::new(2, 1, 1, 1);
-    // Pack two 4-bit signed weights (-8..7) into a single byte: w0 = 2, w1 = 3
-    let packed_kernel = [pack_s4_pair(2i8, 3i8)];
+fn run_inference() {
+    let mut arena = [0u8; GestureClassifier::ARENA_SIZE];
+    let sensor_features = [12i8, -4, 30, 2];
     
-    let output_dims = Dims::new(1, 1, 1, 1);
-    let mut output = [0i8; 1];
-
-    fully_connected_s4(
-        &fc_params,
-        &quant_params,
-        &input_dims,
-        &input,
-        &filter_dims,
-        &packed_kernel,
-        None,
-        &output_dims,
-        &mut output,
-    ).unwrap();
-
-    // output[0] = 13
+    let logits = GestureClassifier::predict(&sensor_features, &mut arena).unwrap();
 }
 ```
 
----
+### 2. Static Memory Profiling (CLI)
+```bash
+cargo run -p embedded-nn-cli -- profile --model models/gesture_classifier.json
+```
 
-## Module Overview
-
-| Module | Description |
-| :--- | :--- |
-| [`types`](src/types.rs) | Tensor dimensions (`Dims`), kernel shapes (`Tile`), `TensorView` spatial windowing (`TensorViewPadding`), quantization parameters, `FusedActivation`, layer config structs. |
-| [`support`](src/support.rs) | Requantization math (`requantize`, `doubling_high_mult_no_sat`, `divide_by_power_of_two`), float quantization (`quantize_f32_to_s8`, `dequantize_s8_to_f32`). |
-| [`simd`](src/simd.rs) | Vectorized 4-way/8-way dot product routines (`vec_dot_s8`, `vec_dot_s16`). |
-| [`subbyte`](src/subbyte.rs) | 4-bit (`s4`) sub-byte packing/unpacking and quantized layers (`fully_connected_s4`, `convolve_s4`). |
-| [`recurrent`](src/recurrent.rs) | Recurrent neural network layers (`lstm_step_s8_s16`, `svdf_s8`). |
-| [`float_ops`](src/float_ops.rs) | IEEE-754 `f16` half-precision conversions and `f32` fallback operations (`convolve_f32`, `softmax_f32`). |
-| [`activations`](src/activations.rs) | ReLU, ReLU6, LeakyReLU, Sigmoid, Tanh, Fused activations. |
-| [`basic_math`](src/basic_math.rs) | Elementwise Add, Subtract, Multiply. |
-| [`convolution`](src/convolution.rs) | 2D Convolution, Depthwise Convolution (per-tensor & per-channel). |
-| [`fully_connected`](src/fully_connected.rs) | Dense / Linear layer (per-tensor & per-channel). |
-| [`pooling`](src/pooling.rs) | Max Pool 2D, Average Pool 2D. |
-| [`softmax`](src/softmax.rs) | Fixed-point exponential Softmax. |
-| [`concat`](src/concat.rs) | Tensor depthwise concatenation. |
-| [`pad`](src/pad.rs) | Tensor padding. |
-| [`transpose`](src/transpose.rs) | Matrix and spatial transposition. |
-| [`reshape`](src/reshape.rs) | Tensor reshaping. |
+### 3. Launching the TinyML Studio
+```bash
+cargo run -p embedded-nn-studio
+```
 
 ---
 
 ## License
 
-The contents of this repository are dual-licensed under the _MIT OR Apache 2.0_
-License. That means you can choose either the MIT license or the Apache 2.0
-license when you re-use this code. See [`LICENSE-MIT`](./LICENSE-MIT) or
-[`LICENSE-APACHE`](./LICENSE-APACHE) for more information on each specific
-license.
+Dual-licensed under either of:
+- MIT License ([`LICENSE-MIT`](./LICENSE-MIT))
+- Apache License, Version 2.0 ([`LICENSE-APACHE`](./LICENSE-APACHE))

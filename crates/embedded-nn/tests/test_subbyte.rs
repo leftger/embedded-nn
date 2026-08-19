@@ -1,6 +1,6 @@
 use embedded_nn::{
-    subbyte::{convolve_s4, fully_connected_s4, pack_s4_pair, unpack_s4_pair},
     Activation, ConvParams, Dims, FcParams, PerTensorQuantParams, Tile,
+    subbyte::{convolve_s4, fully_connected_s4, pack_s4_pair, unpack_s4_pair},
 };
 
 #[test]

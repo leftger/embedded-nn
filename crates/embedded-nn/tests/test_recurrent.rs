@@ -1,6 +1,6 @@
 use embedded_nn::{
-    recurrent::{lstm_step_s16, lstm_step_s8_s16, svdf_s8, svdf_state_s16_s8, LstmGateParams},
     Activation, PerTensorQuantParams,
+    recurrent::{LstmGateParams, lstm_step_s8_s16, lstm_step_s16, svdf_s8, svdf_state_s16_s8},
 };
 
 #[test]

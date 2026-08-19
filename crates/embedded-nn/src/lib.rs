@@ -45,14 +45,14 @@ pub mod types;
 
 #[cfg(feature = "libm")]
 pub use ml::{
-    hz_to_mel, mel_filterbank_f32, mel_to_hz, mfcc_f32, GaussianNaiveBayesInstanceF32,
-    SvmInstanceF32, SvmKernelType,
+    GaussianNaiveBayesInstanceF32, SvmInstanceF32, SvmKernelType, hz_to_mel, mel_filterbank_f32,
+    mel_to_hz, mfcc_f32,
 };
 
 pub use support::{
-    clamp, dequantize_s16_to_f32, dequantize_s8_to_f32, divide_by_power_of_two,
-    doubling_high_mult_no_sat, pack_q15x2_32x1, pack_s8x4_32x1, quantize_f32_to_s16,
-    quantize_f32_to_s8, requantize, requantize_s64,
+    clamp, dequantize_s8_to_f32, dequantize_s16_to_f32, divide_by_power_of_two,
+    doubling_high_mult_no_sat, pack_q15x2_32x1, pack_s8x4_32x1, quantize_f32_to_s8,
+    quantize_f32_to_s16, requantize, requantize_s64,
 };
 pub use types::{
     Activation, Context, ConvParams, Dims, DwConvParams, Error, FcParams, FusedActivation,
@@ -62,7 +62,7 @@ pub use types::{
 
 pub use convolution::{convolve_1_x_n_s8, transpose_conv_s8};
 pub use float_ops::{f16_to_f32, f32_to_f16};
-pub use fully_connected::{batch_matmul_s16, batch_matmul_s8};
-pub use recurrent::{lstm_step_s16, lstm_step_s8_s16, svdf_s8, svdf_state_s16_s8, LstmGateParams};
-pub use simd::{vec_dot_s16, vec_dot_s8};
+pub use fully_connected::{batch_matmul_s8, batch_matmul_s16};
+pub use recurrent::{LstmGateParams, lstm_step_s8_s16, lstm_step_s16, svdf_s8, svdf_state_s16_s8};
+pub use simd::{vec_dot_s8, vec_dot_s16};
 pub use subbyte::{convolve_s4, fully_connected_s4, pack_s4_pair, unpack_s4_pair};

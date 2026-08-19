@@ -1,6 +1,6 @@
 use embedded_nn::{
-    pooling::{avg_pool_s16, avg_pool_s8, max_pool_s16, max_pool_s8},
     Activation, Dims, PoolParams, Tile,
+    pooling::{avg_pool_s8, avg_pool_s16, max_pool_s8, max_pool_s16},
 };
 
 #[test]

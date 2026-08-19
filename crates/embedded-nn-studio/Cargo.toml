@@ -1,0 +1,26 @@
+[package]
+name = "embedded-nn-studio"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cross-platform interactive TinyML Studio for embedded-nn (Ingest, Train, Quantize, Arena & Codegen)"
+
+[[bin]]
+name = "embedded-nn-studio"
+path = "src/main.rs"
+
+[dependencies]
+embedded-nn = { workspace = true, features = ["alloc", "float"] }
+embedded-nn-compiler = { workspace = true }
+embedded-nn-codegen = { workspace = true }
+embedded-nn-live = { workspace = true }
+embedded-dsp = { workspace = true, optional = true }
+eframe = { workspace = true }
+egui_extras = { workspace = true }
+rfd = { workspace = true }
+nusb = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

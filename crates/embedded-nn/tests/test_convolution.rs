@@ -1,11 +1,11 @@
 use embedded_nn::{
+    Activation, ConvParams, Dims, DwConvParams, Error, PerChannelQuantParams, PerTensorQuantParams,
+    Tile,
     convolution::{
         convolve_1_x_n_s8, convolve_per_channel_s8, convolve_s8, depthwise_conv_per_channel_s8,
         transpose_conv_s8,
     },
     float_ops::convolve_f32,
-    Activation, ConvParams, Dims, DwConvParams, Error, PerChannelQuantParams, PerTensorQuantParams,
-    Tile,
 };
 
 #[test]

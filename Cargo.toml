@@ -1,23 +1,43 @@
-[package]
-name = "embedded-nn"
+[workspace]
+resolver = "2"
+members = [
+    "crates/embedded-nn",
+    "crates/embedded-nn-compiler",
+    "crates/embedded-nn-codegen",
+    "crates/embedded-nn-macros",
+    "crates/embedded-nn-live",
+    "crates/embedded-nn-cli",
+    "crates/embedded-nn-studio",
+]
+
+[workspace.package]
 version = "0.2.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.87"
 authors = ["Gerzain Mata <leftger@gmail.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/leftger/embedded-nn"
-description = "A pure Rust, #![no_std] neural network inference library inspired by CMSIS-NN for microcontrollers and embedded targets."
 readme = "README.md"
-keywords = ["no-std", "embedded", "cmsis-nn", "neural-network", "quantization"]
-categories = ["embedded", "science", "no-std"]
 
-[features]
-default = ["libm"]
-alloc = []
-float = []
-simd = []
-libm = ["dep:libm"]
+[workspace.dependencies]
+embedded-nn = { path = "crates/embedded-nn", default-features = false }
+embedded-nn-compiler = { path = "crates/embedded-nn-compiler" }
+embedded-nn-codegen = { path = "crates/embedded-nn-codegen" }
+embedded-nn-macros = { path = "crates/embedded-nn-macros" }
+embedded-nn-live = { path = "crates/embedded-nn-live" }
 
-[dependencies]
-libm = { version = "0.2.11", optional = true }
+embedded-dsp = { path = "../embedded-dsp", version = "0.1.0", default-features = false, features = ["libm"] }
 
-[dev-dependencies]
+libm = { version = "0.2.11" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full"] }
+clap = { version = "4.5", features = ["derive"] }
+
+eframe = { version = "0.31", default-features = true }
+egui_extras = { version = "0.31", features = ["syntect"] }
+rfd = "0.15"
+nusb = "0.2"

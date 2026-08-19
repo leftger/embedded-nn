@@ -1,10 +1,10 @@
 use embedded_nn::{
-    activations::{
-        activation_s16, activation_s8, leaky_relu_s8, relu6_s8, relu_s16, relu_s8, sigmoid_s16,
-        sigmoid_s8, tanh_s16, tanh_s8, SIGMOID_TABLE_UINT16,
-    },
-    float_ops::{relu6_f32, relu_f32},
     Activation,
+    activations::{
+        SIGMOID_TABLE_UINT16, activation_s8, activation_s16, leaky_relu_s8, relu_s8, relu_s16,
+        relu6_s8, sigmoid_s8, sigmoid_s16, tanh_s8, tanh_s16,
+    },
+    float_ops::{relu_f32, relu6_f32},
 };
 
 #[test]

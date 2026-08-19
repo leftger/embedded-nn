@@ -1,6 +1,6 @@
 use embedded_nn::{
     float_ops::softmax_f32,
-    softmax::{exp_on_negative_values, one_over_one_plus_x_for_x_in_0_1, softmax_s16, softmax_s8},
+    softmax::{exp_on_negative_values, one_over_one_plus_x_for_x_in_0_1, softmax_s8, softmax_s16},
 };
 
 #[test]

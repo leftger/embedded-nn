@@ -1,11 +1,11 @@
 use embedded_nn::{
+    Activation, Dims, FcParams, PerChannelQuantParams, PerTensorQuantParams,
     float_ops::fully_connected_f32,
     fully_connected::{
-        batch_matmul_s16, batch_matmul_s8, fully_connected_per_channel_s8, fully_connected_s16,
-        fully_connected_s8,
+        batch_matmul_s8, batch_matmul_s16, fully_connected_per_channel_s8, fully_connected_s8,
+        fully_connected_s16,
     },
     subbyte::{fully_connected_s4, pack_s4_pair},
-    Activation, Dims, FcParams, PerChannelQuantParams, PerTensorQuantParams,
 };
 
 #[test]

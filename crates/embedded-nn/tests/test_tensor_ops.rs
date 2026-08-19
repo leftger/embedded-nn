@@ -1,9 +1,9 @@
 use embedded_nn::{
+    Dims, Error, Tile,
     concat::concatenation_s8,
     pad::pad_s8,
     reshape::reshape_s8,
     transpose::{transpose_2d_s8, transpose_spatial_s8},
-    Dims, Error, Tile,
 };
 
 #[test]

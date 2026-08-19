@@ -10,29 +10,29 @@ repos:
         pass_filenames: false
 
       - id: cargo-check
-        name: cargo check (all-features)
-        entry: cargo check --lib --all-features
+        name: cargo check (workspace)
+        entry: cargo check --workspace
         language: system
         types: [rust]
         pass_filenames: false
 
       - id: cargo-check-no-std
         name: cargo check (no_std)
-        entry: cargo check --lib --no-default-features --target thumbv7em-none-eabihf
+        entry: cargo check --lib -p embedded-nn --no-default-features --features libm --target thumbv7em-none-eabihf
         language: system
         types: [rust]
         pass_filenames: false
 
       - id: cargo-clippy
         name: cargo clippy
-        entry: cargo clippy --lib --all-features -- -W clippy::all
+        entry: cargo clippy --workspace -- -W clippy::all
         language: system
         types: [rust]
         pass_filenames: false
 
       - id: cargo-test
         name: cargo test
-        entry: cargo test
+        entry: cargo test --workspace
         language: system
         types: [rust]
         pass_filenames: false
