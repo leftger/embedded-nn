@@ -3,6 +3,7 @@ use embedded_nn_codegen::RustCodeGenerator;
 use embedded_nn_compiler::arena::ArenaScheduler;
 use embedded_nn_compiler::ir::ModelGraph;
 use embedded_nn_live::host::UsbBridge;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -32,6 +33,17 @@ enum Commands {
     },
     /// List connected USB devices for live streaming
     Devices,
+    /// Work with JSON Lines dataset interchange files
+    Dataset {
+        #[command(subcommand)]
+        action: DatasetAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum DatasetAction {
+    /// Report record count, channel-shape consistency and label distribution
+    Validate { path: PathBuf },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -93,6 +105,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("  [{}] {}", i, dev);
                 }
             }
+        }
+        Commands::Dataset {
+            action: DatasetAction::Validate { path },
+        } => {
+            let records = embedded_nn_live::parse_jsonl(&fs::read_to_string(&path)?)
+                .map_err(|e| format!("invalid dataset {}: {}", path.display(), e))?;
+
+            let mut labels: BTreeMap<&str, usize> = BTreeMap::new();
+            let mut channel_shapes: BTreeMap<String, usize> = BTreeMap::new();
+            let mut ragged: Vec<&str> = Vec::new();
+
+            for record in &records {
+                *labels
+                    .entry(record.label.as_deref().unwrap_or("<unlabeled>"))
+                    .or_default() += 1;
+                *channel_shapes
+                    .entry(record.channel_names.join(","))
+                    .or_default() += 1;
+                if record
+                    .waveform
+                    .iter()
+                    .any(|step| step.len() != record.channel_names.len())
+                {
+                    ragged.push(&record.sample_id);
+                }
+            }
+
+            println!("==================================================");
+            println!("  Dataset: {:?}", path);
+            println!("==================================================");
+            println!("Records:               {}", records.len());
+            println!(
+                "Time steps (min/max):  {}/{}",
+                records.iter().map(|r| r.waveform.len()).min().unwrap_or(0),
+                records.iter().map(|r| r.waveform.len()).max().unwrap_or(0)
+            );
+            println!("--------------------------------------------------");
+            println!("Channel layouts:");
+            for (names, count) in &channel_shapes {
+                println!("  [{}] -> {} record(s)", names, count);
+            }
+            println!("--------------------------------------------------");
+            println!("Label distribution:");
+            for (label, count) in &labels {
+                println!("  {:<24} {} record(s)", label, count);
+            }
+            if !ragged.is_empty() {
+                println!("--------------------------------------------------");
+                println!(
+                    "WARNING: {} record(s) have time steps that do not match channel_names:",
+                    ragged.len()
+                );
+                for id in &ragged {
+                    println!("  {}", id);
+                }
+            }
+            println!("==================================================");
         }
     }
 

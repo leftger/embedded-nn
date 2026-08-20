@@ -200,6 +200,17 @@ impl StudioState {
         }
     }
 
+    /// Index of `label` in `classes`, appending it as a new class if unseen
+    pub fn class_index_or_insert(&mut self, label: &str) -> usize {
+        match self.classes.iter().position(|c| c == label) {
+            Some(idx) => idx,
+            None => {
+                self.classes.push(label.to_string());
+                self.classes.len() - 1
+            }
+        }
+    }
+
     /// Extract frequency-domain energy bins from raw time-series using DSP settings
     pub fn extract_features_with_dsp(dsp: &DspConfig, raw: &[f32]) -> Vec<f32> {
         let num_bins = dsp.num_mel_bins;

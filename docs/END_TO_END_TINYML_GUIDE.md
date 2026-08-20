@@ -70,6 +70,14 @@ fn stream_sensor_sample(accel_x: f32, accel_y: f32, accel_z: f32, timestamp: u32
 4. Set the sample label (e.g., `gesture_swipe_left`, `gesture_tap`, `vibration_fault`).
 5. Click **⏺ Record Sample** to capture labeled time-series frames directly into your training dataset.
 
+### Importing Previously Captured Data
+Captures that were logged elsewhere (on-device flash logs, a Python capture rig, a CSV
+export) can be brought in as a JSON Lines file via **📂 Import Dataset File(s)** on the
+same tab, then labeled per sample in the **Dataset Samples Explorer**. Validate a file
+headlessly first with `enn dataset validate dataset.jsonl`.
+
+See **[Dataset Import Format](DATASET_IMPORT_FORMAT.md)** for the schema.
+
 ---
 
 ## 3. Phase 2: DSP Preprocessing & Feature Extraction

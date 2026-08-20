@@ -1,5 +1,16 @@
-use crate::state::StudioState;
+use crate::state::{DatasetSample, StudioState};
 use eframe::egui;
+use std::path::{Path, PathBuf};
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Label assigned to imported records that carry no label of their own.
+const UNLABELED_IMPORT: &str = "unlabeled_import";
 
 #[derive(Default)]
 pub struct IngestView {
@@ -10,6 +21,7 @@ pub struct IngestView {
     pub is_recording: bool,
     pub live_sensor_history: Vec<f32>,
     pub live_time_counter: f32,
+    pub import_status: String,
 }
 
 impl IngestView {
@@ -22,7 +34,51 @@ impl IngestView {
             is_recording: false,
             live_sensor_history: (0..100).map(|i| ((i as f32) * 0.1).sin() * 0.7).collect(),
             live_time_counter: 0.0,
+            import_status: String::new(),
         }
+    }
+
+    fn import_dataset_files(&mut self, state: &mut StudioState, paths: &[PathBuf]) {
+        let mut imported = 0usize;
+        let mut errors: Vec<String> = Vec::new();
+
+        for path in paths {
+            match std::fs::read_to_string(path).map_err(|e| e.to_string()) {
+                Ok(contents) => match embedded_nn_live::parse_jsonl(&contents) {
+                    Ok(records) => {
+                        for record in records {
+                            let label = record.label_or(UNLABELED_IMPORT);
+                            let class_idx = state.class_index_or_insert(&label);
+                            let id = state.next_sample_id;
+                            state.next_sample_id += 1;
+                            state.samples.push(DatasetSample {
+                                id,
+                                label,
+                                class_idx,
+                                raw_waveform: record.scalar_channel(),
+                                features: Vec::new(),
+                                quantized_features: Vec::new(),
+                            });
+                            imported += 1;
+                        }
+                    }
+                    Err(e) => errors.push(format!("{}: {}", file_name(path), e)),
+                },
+                Err(e) => errors.push(format!("{}: {}", file_name(path), e)),
+            }
+        }
+
+        if imported > 0 {
+            state.recompute_all_features();
+            state.reset_training();
+            state.rebuild_model_graph_and_codegen();
+        }
+
+        self.import_status = if errors.is_empty() {
+            format!("Imported {} sample(s).", imported)
+        } else {
+            format!("Imported {} sample(s). {}", imported, errors.join("; "))
+        };
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, state: &mut StudioState) {
@@ -125,7 +181,21 @@ impl IngestView {
                         state.rebuild_model_graph_and_codegen();
                     }
                 }
+
+                ui.separator();
+
+                if ui.button("📂 Import Dataset File(s)").clicked()
+                    && let Some(paths) = rfd::FileDialog::new()
+                        .add_filter("JSON Lines dataset", &["jsonl", "ndjson"])
+                        .pick_files()
+                {
+                    self.import_dataset_files(state, &paths);
+                }
             });
+
+            if !self.import_status.is_empty() {
+                ui.label(&self.import_status);
+            }
         });
 
         ui.add_space(8.0);
@@ -260,12 +330,31 @@ impl IngestView {
                             ui.end_row();
 
                             let mut delete_id = None;
+                            let mut relabel = None;
                             for sample in state.samples.iter().rev().take(30) {
                                 ui.label(format!("#{:03}", sample.id));
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(100, 180, 255),
-                                    &sample.label,
-                                );
+
+                                ui.push_id(sample.id, |ui| {
+                                    egui::ComboBox::from_id_salt("sample_relabel_combo")
+                                        .selected_text(&sample.label)
+                                        .show_ui(ui, |ui| {
+                                            for (idx, class_name) in
+                                                state.classes.iter().enumerate()
+                                            {
+                                                if ui
+                                                    .selectable_label(
+                                                        sample.label == *class_name,
+                                                        class_name,
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    relabel =
+                                                        Some((sample.id, idx, class_name.clone()));
+                                                }
+                                            }
+                                        });
+                                });
+
                                 ui.label(format!("{} samples", sample.raw_waveform.len()));
                                 ui.label(format!("{} Mel bins", sample.features.len()));
 
@@ -277,6 +366,14 @@ impl IngestView {
                                 ui.end_row();
                             }
 
+                            if let Some((id, class_idx, label)) = relabel
+                                && let Some(sample) = state.samples.iter_mut().find(|s| s.id == id)
+                            {
+                                sample.label = label;
+                                sample.class_idx = class_idx;
+                                state.rebuild_model_graph_and_codegen();
+                            }
+
                             if let Some(id) = delete_id {
                                 state.samples.retain(|s| s.id != id);
                                 state.rebuild_model_graph_and_codegen();
@@ -284,5 +381,106 @@ impl IngestView {
                         });
                 });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FIXTURE: &str = concat!(
+        r#"{"sample_id":"b1","label":null,"sample_rate_hz":400.0,"channel_names":["x","y","z"],"waveform":[[3.0,4.0,0.0],[0.0,0.0,2.0]]}"#,
+        "\n",
+        r#"{"sample_id":"b2","label":"recoil_anomaly","sample_rate_hz":400.0,"channel_names":["value"],"waveform":[[0.5],[-0.5]]}"#,
+        "\n"
+    );
+
+    fn collect_text<'a>(shapes: impl Iterator<Item = &'a egui::Shape>, out: &mut String) {
+        for shape in shapes {
+            match shape {
+                egui::Shape::Text(text) => out.push_str(text.galley.text()),
+                egui::Shape::Vec(inner) => collect_text(inner.iter(), out),
+                _ => {}
+            }
+        }
+    }
+
+    fn write_fixture(name: &str, contents: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(name);
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[test]
+    fn import_adds_samples_collapses_channels_and_registers_new_classes() {
+        let mut view = IngestView::new();
+        let mut state = StudioState::default();
+        let before = state.samples.len();
+        let path = write_fixture("enn_ingest_import_ok.jsonl", FIXTURE);
+
+        view.import_dataset_files(&mut state, std::slice::from_ref(&path));
+
+        assert_eq!(state.samples.len(), before + 2);
+        let imported = &state.samples[before..];
+        assert_eq!(imported[0].label, UNLABELED_IMPORT);
+        assert_eq!(imported[0].raw_waveform, vec![5.0, 2.0]);
+        assert_eq!(imported[1].label, "recoil_anomaly");
+        assert_eq!(imported[1].raw_waveform, vec![0.5, -0.5]);
+        assert!(state.classes.contains(&UNLABELED_IMPORT.to_string()));
+        assert_eq!(state.classes[imported[1].class_idx], "recoil_anomaly");
+
+        // Features and codegen must be refreshed for the newly imported samples.
+        assert_eq!(imported[0].features.len(), state.dsp.num_mel_bins);
+        assert!(!state.generated_rust_code.is_empty());
+        assert_eq!(state.bias_fc2.len(), state.classes.len());
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn view_paints_import_button_and_imported_sample_labels() {
+        let mut view = IngestView::new();
+        let mut state = StudioState::default();
+        let path = write_fixture("enn_ingest_render.jsonl", FIXTURE);
+        view.import_dataset_files(&mut state, std::slice::from_ref(&path));
+
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 1000.0),
+            )),
+            ..Default::default()
+        };
+        let output = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| view.show(ui, &mut state));
+        });
+
+        let mut painted = String::new();
+        collect_text(output.shapes.iter().map(|c| &c.shape), &mut painted);
+
+        assert!(painted.contains("Import Dataset File(s)"));
+        assert!(painted.contains("Imported 2 sample(s)."));
+        // Newest samples render first in the explorer, each with a relabel combo.
+        assert!(painted.contains("recoil_anomaly"));
+        assert!(painted.contains(UNLABELED_IMPORT));
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn import_reports_malformed_file_without_adding_samples() {
+        let mut view = IngestView::new();
+        let mut state = StudioState::default();
+        let before = state.samples.len();
+        let path = write_fixture("enn_ingest_import_bad.jsonl", "not json\n");
+
+        view.import_dataset_files(&mut state, std::slice::from_ref(&path));
+
+        assert_eq!(state.samples.len(), before);
+        assert!(view.import_status.contains("enn_ingest_import_bad.jsonl"));
+        assert!(view.import_status.contains("line 1"));
+
+        std::fs::remove_file(&path).unwrap();
     }
 }
