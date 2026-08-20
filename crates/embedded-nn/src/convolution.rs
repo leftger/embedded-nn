@@ -53,23 +53,35 @@ pub fn convolve_s8(
 
                         for ky in 0..kernel_h {
                             let in_y = base_y + ky as i32 * conv_params.dilation.h;
-                            if in_y >= 0 && in_y < input_dims.h {
-                                for kx in 0..kernel_w {
-                                    let in_x = base_x + kx as i32 * conv_params.dilation.w;
-                                    if in_x >= 0 && in_x < input_dims.w {
-                                        let in_idx_base = ((b * input_h + in_y as usize) * input_w
-                                            + in_x as usize)
-                                            * input_c
-                                            + g * kernel_c;
-                                        let ker_idx_base =
-                                            ((out_c * kernel_h + ky) * kernel_w + kx) * kernel_c;
+                            let y_in_bounds = in_y >= 0 && in_y < input_dims.h;
+                            for kx in 0..kernel_w {
+                                let in_x = base_x + kx as i32 * conv_params.dilation.w;
+                                let x_in_bounds = in_x >= 0 && in_x < input_dims.w;
+                                let ker_idx_base =
+                                    ((out_c * kernel_h + ky) * kernel_w + kx) * kernel_c;
 
-                                        for ic in 0..kernel_c {
-                                            let lhs = input[in_idx_base + ic] as i32
-                                                + conv_params.input_offset;
-                                            let rhs = kernel[ker_idx_base + ic] as i32;
-                                            acc += lhs * rhs;
-                                        }
+                                if y_in_bounds && x_in_bounds {
+                                    let in_idx_base = ((b * input_h + in_y as usize) * input_w
+                                        + in_x as usize)
+                                        * input_c
+                                        + g * kernel_c;
+
+                                    for ic in 0..kernel_c {
+                                        let lhs = input[in_idx_base + ic] as i32
+                                            + conv_params.input_offset;
+                                        let rhs = kernel[ker_idx_base + ic] as i32;
+                                        acc += lhs * rhs;
+                                    }
+                                } else {
+                                    // Zero-point masking under padding: the true padded value is
+                                    // 0, which after `+ input_offset` is `input_offset`, not "no
+                                    // contribution" -- required for bit-exact asymmetric-quantized
+                                    // SAME-padding results. A no-op when input_offset == 0
+                                    // (symmetric quantization), which is why this was safe to add
+                                    // without affecting any existing symmetric-quantized model.
+                                    for ic in 0..kernel_c {
+                                        let rhs = kernel[ker_idx_base + ic] as i32;
+                                        acc += conv_params.input_offset * rhs;
                                     }
                                 }
                             }
@@ -139,23 +151,30 @@ pub fn convolve_per_channel_s8(
 
                         for ky in 0..kernel_h {
                             let in_y = base_y + ky as i32 * conv_params.dilation.h;
-                            if in_y >= 0 && in_y < input_dims.h {
-                                for kx in 0..kernel_w {
-                                    let in_x = base_x + kx as i32 * conv_params.dilation.w;
-                                    if in_x >= 0 && in_x < input_dims.w {
-                                        let in_idx_base = ((b * input_h + in_y as usize) * input_w
-                                            + in_x as usize)
-                                            * input_c
-                                            + g * kernel_c;
-                                        let ker_idx_base =
-                                            ((out_c * kernel_h + ky) * kernel_w + kx) * kernel_c;
+                            let y_in_bounds = in_y >= 0 && in_y < input_dims.h;
+                            for kx in 0..kernel_w {
+                                let in_x = base_x + kx as i32 * conv_params.dilation.w;
+                                let x_in_bounds = in_x >= 0 && in_x < input_dims.w;
+                                let ker_idx_base =
+                                    ((out_c * kernel_h + ky) * kernel_w + kx) * kernel_c;
 
-                                        for ic in 0..kernel_c {
-                                            let lhs = input[in_idx_base + ic] as i32
-                                                + conv_params.input_offset;
-                                            let rhs = kernel[ker_idx_base + ic] as i32;
-                                            acc += lhs * rhs;
-                                        }
+                                if y_in_bounds && x_in_bounds {
+                                    let in_idx_base = ((b * input_h + in_y as usize) * input_w
+                                        + in_x as usize)
+                                        * input_c
+                                        + g * kernel_c;
+
+                                    for ic in 0..kernel_c {
+                                        let lhs = input[in_idx_base + ic] as i32
+                                            + conv_params.input_offset;
+                                        let rhs = kernel[ker_idx_base + ic] as i32;
+                                        acc += lhs * rhs;
+                                    }
+                                } else {
+                                    // Zero-point masking under padding (see convolve_s8).
+                                    for ic in 0..kernel_c {
+                                        let rhs = kernel[ker_idx_base + ic] as i32;
+                                        acc += conv_params.input_offset * rhs;
                                     }
                                 }
                             }
@@ -222,20 +241,25 @@ pub fn depthwise_conv_per_channel_s8(
 
                     for ky in 0..kernel_h {
                         let in_y = base_y + ky as i32 * dw_params.dilation.h;
-                        if in_y >= 0 && in_y < input_dims.h {
-                            for kx in 0..kernel_w {
-                                let in_x = base_x + kx as i32 * dw_params.dilation.w;
-                                if in_x >= 0 && in_x < input_dims.w {
-                                    let in_idx = ((b * input_h + in_y as usize) * input_w
-                                        + in_x as usize)
-                                        * input_c
-                                        + in_c;
-                                    let ker_idx = ((ky * kernel_w + kx) * output_c) + out_c;
+                        let y_in_bounds = in_y >= 0 && in_y < input_dims.h;
+                        for kx in 0..kernel_w {
+                            let in_x = base_x + kx as i32 * dw_params.dilation.w;
+                            let x_in_bounds = in_x >= 0 && in_x < input_dims.w;
+                            let ker_idx = ((ky * kernel_w + kx) * output_c) + out_c;
 
-                                    let lhs = input[in_idx] as i32 + dw_params.input_offset;
-                                    let rhs = kernel[ker_idx] as i32;
-                                    acc += lhs * rhs;
-                                }
+                            if y_in_bounds && x_in_bounds {
+                                let in_idx = ((b * input_h + in_y as usize) * input_w
+                                    + in_x as usize)
+                                    * input_c
+                                    + in_c;
+
+                                let lhs = input[in_idx] as i32 + dw_params.input_offset;
+                                let rhs = kernel[ker_idx] as i32;
+                                acc += lhs * rhs;
+                            } else {
+                                // Zero-point masking under padding (see convolve_s8).
+                                let rhs = kernel[ker_idx] as i32;
+                                acc += dw_params.input_offset * rhs;
                             }
                         }
                     }
@@ -443,5 +467,102 @@ mod tests {
         .unwrap();
 
         assert_eq!(output, [3, 4, 6, 7]);
+    }
+
+    #[test]
+    fn test_convolve_s8_zero_point_masking_under_same_padding() {
+        // 1x3x3x1 input, single channel:
+        // 1 2 3
+        // 4 5 6
+        // 7 8 9
+        let input = [1i8, 2, 3, 4, 5, 6, 7, 8, 9];
+        let input_dims = Dims::new(1, 3, 3, 1);
+
+        // 1 output channel, 3x3 all-ones kernel.
+        let kernel = [1i8; 9];
+        let filter_dims = Dims::new(1, 3, 3, 1);
+
+        // SAME padding (pad=1), stride 1: output stays 3x3.
+        let output_dims = Dims::new(1, 3, 3, 1);
+        let mut output = [0i8; 9];
+
+        let input_offset = 10;
+        let conv_params = ConvParams {
+            input_offset,
+            output_offset: 0,
+            stride: Tile::new(1, 1),
+            padding: Tile::new(1, 1),
+            dilation: Tile::new(1, 1),
+            activation: Activation::int8_unconstrained(),
+        };
+        let quant_params = PerTensorQuantParams::new(1073741824, 0); // 0.5
+
+        convolve_s8(
+            &conv_params,
+            &quant_params,
+            &input_dims,
+            &input,
+            &filter_dims,
+            &kernel,
+            None,
+            &output_dims,
+            &mut output,
+        )
+        .unwrap();
+
+        // Top-left output (0,0): the 3x3 window covers input rows/cols [-1, 0, 1], so only the
+        // bottom-right 2x2 (values 1, 2, 4, 5) are real; the other 5 taps are padding. Zero-point
+        // masking means each padded tap still contributes `input_offset * weight` (weight = 1
+        // here), not nothing.
+        let masked_raw = (1 + 10) + (2 + 10) + (4 + 10) + (5 + 10) + 5 * (0 + 10);
+        let masked_expected =
+            requantize(masked_raw, quant_params.multiplier, quant_params.shift) as i8;
+        assert_eq!(output[0], masked_expected);
+
+        // Sanity: this must differ from the old "skip padding entirely" behavior, which ignored
+        // the 5 padded taps' offset contribution entirely (raw acc = 52 instead of 102).
+        let unmasked_raw = (1 + 10) + (2 + 10) + (4 + 10) + (5 + 10);
+        let unmasked_expected =
+            requantize(unmasked_raw, quant_params.multiplier, quant_params.shift) as i8;
+        assert_ne!(output[0], unmasked_expected);
+    }
+
+    #[test]
+    fn test_convolve_s8_zero_point_masking_is_noop_when_symmetric() {
+        // With input_offset == 0 (symmetric quantization), masking must be a pure no-op: padded
+        // taps contribute `0 * weight = 0`, identical to the old "skip" behavior.
+        let input = [1i8, 2, 3, 4, 5, 6, 7, 8, 9];
+        let input_dims = Dims::new(1, 3, 3, 1);
+        let kernel = [1i8; 9];
+        let filter_dims = Dims::new(1, 3, 3, 1);
+        let output_dims = Dims::new(1, 3, 3, 1);
+        let mut output = [0i8; 9];
+
+        let conv_params = ConvParams {
+            input_offset: 0,
+            output_offset: 0,
+            stride: Tile::new(1, 1),
+            padding: Tile::new(1, 1),
+            dilation: Tile::new(1, 1),
+            activation: Activation::int8_unconstrained(),
+        };
+        let quant_params = PerTensorQuantParams::new(1073741824, 0);
+
+        convolve_s8(
+            &conv_params,
+            &quant_params,
+            &input_dims,
+            &input,
+            &filter_dims,
+            &kernel,
+            None,
+            &output_dims,
+            &mut output,
+        )
+        .unwrap();
+
+        let raw = 1 + 2 + 4 + 5;
+        let expected = requantize(raw, quant_params.multiplier, quant_params.shift) as i8;
+        assert_eq!(output[0], expected);
     }
 }

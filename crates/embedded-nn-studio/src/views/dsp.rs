@@ -4,12 +4,14 @@ use eframe::egui;
 #[derive(Default)]
 pub struct DspView {
     pub selected_sample_idx: usize,
+    pub selected_frame_idx: usize,
 }
 
 impl DspView {
     pub fn new() -> Self {
         Self {
             selected_sample_idx: 0,
+            selected_frame_idx: 0,
         }
     }
 
@@ -103,10 +105,60 @@ impl DspView {
                     dsp_changed = true;
                 }
             });
+
+            ui.add_space(4.0);
+
+            ui.horizontal(|ui| {
+                ui.label("Sample Rate:");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut state.dsp.sample_rate)
+                            .suffix(" Hz")
+                            .range(10.0..=2000.0),
+                    )
+                    .changed()
+                {
+                    dsp_changed = true;
+                }
+
+                ui.separator();
+
+                ui.label("Frame Hop Size:");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut state.dsp.frame_hop_size)
+                            .suffix(" samples")
+                            .range(1..=512),
+                    )
+                    .changed()
+                {
+                    dsp_changed = true;
+                }
+
+                ui.separator();
+
+                ui.label("Capture Window:");
+                let min_capture = state.dsp.window_size as u64;
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut state.dsp.capture_samples)
+                            .suffix(" samples")
+                            .range(min_capture..=4096),
+                    )
+                    .changed()
+                {
+                    dsp_changed = true;
+                }
+
+                ui.separator();
+
+                let num_frames = StudioState::num_frames_for_config(&state.dsp);
+                ui.label(format!("→ {} frames/sample", num_frames));
+            });
         });
 
         if dsp_changed {
-            state.recompute_all_features();
+            state.recompute_all_frames();
             state.reset_training();
             state.rebuild_model_graph_and_codegen();
         }
@@ -139,6 +191,20 @@ impl DspView {
         ui.add_space(8.0);
 
         let active_sample = state.samples.get(self.selected_sample_idx).cloned();
+
+        if let Some(s) = &active_sample
+            && s.frames.len() > 1
+        {
+            self.selected_frame_idx = self.selected_frame_idx.min(s.frames.len() - 1);
+            ui.horizontal(|ui| {
+                ui.label("Preview Frame:");
+                ui.add(
+                    egui::Slider::new(&mut self.selected_frame_idx, 0..=s.frames.len() - 1)
+                        .text("frame index"),
+                );
+            });
+            ui.add_space(8.0);
+        }
 
         // 3-Stage Signal Transformation Flow Visualization
         ui.columns(3, |cols| {
@@ -189,11 +255,13 @@ impl DspView {
                 let painter = ui.painter_at(rect);
                 painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(16, 20, 28));
 
-                if let Some(s) = &active_sample {
-                    let num_bins = s.features.len();
+                if let Some(s) = &active_sample
+                    && let Some(frame) = s.frames.get(self.selected_frame_idx)
+                {
+                    let num_bins = frame.len();
                     if num_bins > 0 {
                         let col_w = rect.width() / num_bins as f32;
-                        for (i, &energy) in s.features.iter().enumerate() {
+                        for (i, &energy) in frame.iter().enumerate() {
                             let bar_h =
                                 (energy * (rect.height() - 10.0)).clamp(2.0, rect.height() - 10.0);
                             let bar_rect = egui::Rect::from_min_size(
@@ -226,12 +294,14 @@ impl DspView {
                 let painter = ui.painter_at(rect);
                 painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(16, 20, 28));
 
-                if let Some(s) = &active_sample {
-                    let num_bins = s.quantized_features.len();
+                if let Some(s) = &active_sample
+                    && let Some(frame) = s.quantized_frames.get(self.selected_frame_idx)
+                {
+                    let num_bins = frame.len();
                     if num_bins > 0 {
                         let col_w = rect.width() / num_bins as f32;
                         let mid_y = rect.center().y;
-                        for (i, &q_val) in s.quantized_features.iter().enumerate() {
+                        for (i, &q_val) in frame.iter().enumerate() {
                             let h = (q_val as f32 / 127.0) * 50.0;
                             let bar_rect = if h >= 0.0 {
                                 egui::Rect::from_min_max(

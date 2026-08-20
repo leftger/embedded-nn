@@ -2,6 +2,9 @@ use crate::state::StudioState;
 use crate::syntax::highlight_rust;
 use eframe::egui;
 
+/// Inner/outer margins of an `egui` group frame, which shrink the space usable by its contents.
+const GROUP_VERTICAL_PADDING: f32 = 16.0;
+
 #[derive(Default)]
 pub struct CodegenView {
     pub copy_status: Option<String>,
@@ -43,9 +46,12 @@ impl CodegenView {
         ui.add_space(8.0);
 
         // Split Layout: Left is Interactive Live Inference Playground, Right is Generated Rust Code
+        let column_height = ui.available_height();
         ui.columns(2, |cols| {
             // Left Column: Interactive Inference Playground
+            cols[0].set_min_height(column_height);
             cols[0].group(|ui| {
+                ui.set_min_height(column_height - GROUP_VERTICAL_PADDING);
                 ui.horizontal(|ui| {
                     ui.label("🎮 Live Virtual Inference Playground");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -80,9 +86,13 @@ impl CodegenView {
                             });
 
                         if self.selected_test_sample_idx != prev_idx {
-                            state.test_input_vector = state.samples[self.selected_test_sample_idx]
-                                .quantized_features
-                                .clone();
+                            let num_mel_bins = state.dsp.num_mel_bins;
+                            let sample = &state.samples[self.selected_test_sample_idx];
+                            state.test_input_vector = StudioState::test_input_vector_for(
+                                state.model_config.arch,
+                                num_mel_bins,
+                                sample,
+                            );
                             state.run_test_inference();
                         }
                     });
@@ -126,7 +136,7 @@ impl CodegenView {
                 ui.label("Input Feature Sliders (Int8 quantized):");
                 egui::ScrollArea::vertical()
                     .id_salt("codegen_feature_sliders_scroll")
-                    .max_height(140.0)
+                    .auto_shrink([false; 2])
                     .show(ui, |ui| {
                         let mut changed = false;
                         for (i, val) in state.test_input_vector.iter_mut().enumerate() {
@@ -146,7 +156,9 @@ impl CodegenView {
             });
 
             // Right Column: Generated #![no_std] Rust Source Code with Syntax Highlighting
+            cols[1].set_min_height(column_height);
             cols[1].group(|ui| {
+                ui.set_min_height(column_height - GROUP_VERTICAL_PADDING);
                 ui.label("📄 Generated #![no_std] Rust Module");
                 ui.separator();
 
@@ -158,7 +170,7 @@ impl CodegenView {
 
                 egui::ScrollArea::vertical()
                     .id_salt("codegen_rust_code_scroll")
-                    .max_height(340.0)
+                    .auto_shrink([false; 2])
                     .show(ui, |ui| {
                         ui.add(
                             egui::TextEdit::multiline(&mut state.generated_rust_code)

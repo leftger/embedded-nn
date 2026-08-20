@@ -1,0 +1,17 @@
+[package]
+name = "embedded-nn-tflite"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "TensorFlow Lite (.tflite) FlatBuffers importer for embedded-nn"
+include = ["/src/**", "/schema/**", "/tests/**", "/fixtures/**", "/Cargo.toml"]
+
+[dependencies]
+embedded-nn-compiler = { workspace = true }
+flatbuffers = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+embedded-nn-codegen = { workspace = true }

@@ -21,3 +21,8 @@ libm = ["dep:libm"]
 libm = { workspace = true, optional = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "kernels"
+harness = false

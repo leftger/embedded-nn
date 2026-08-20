@@ -8,6 +8,7 @@ members = [
     "crates/embedded-nn-live",
     "crates/embedded-nn-cli",
     "crates/embedded-nn-studio",
+    "crates/embedded-nn-tflite",
 ]
 
 [workspace.package]
@@ -25,6 +26,7 @@ embedded-nn-compiler = { path = "crates/embedded-nn-compiler" }
 embedded-nn-codegen = { path = "crates/embedded-nn-codegen" }
 embedded-nn-macros = { path = "crates/embedded-nn-macros" }
 embedded-nn-live = { path = "crates/embedded-nn-live" }
+embedded-nn-tflite = { path = "crates/embedded-nn-tflite" }
 
 libm = { version = "0.2.11" }
 serde = { version = "1.0", features = ["derive"] }
@@ -34,6 +36,9 @@ proc-macro2 = "1.0"
 quote = "1.0"
 syn = { version = "2.0", features = ["full"] }
 clap = { version = "4.5", features = ["derive"] }
+criterion = { version = "0.5" }
+embedded-dsp = { version = "0.2.2", default-features = false, features = ["libm"] }
+flatbuffers = "25.12"
 
 eframe = { version = "0.31", default-features = true }
 egui_extras = { version = "0.31" }

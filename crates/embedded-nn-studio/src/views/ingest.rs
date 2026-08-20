@@ -56,8 +56,8 @@ impl IngestView {
                                 label,
                                 class_idx,
                                 raw_waveform: record.scalar_channel(),
-                                features: Vec::new(),
-                                quantized_features: Vec::new(),
+                                frames: Vec::new(),
+                                quantized_frames: Vec::new(),
                             });
                             imported += 1;
                         }
@@ -69,7 +69,7 @@ impl IngestView {
         }
 
         if imported > 0 {
-            state.recompute_all_features();
+            state.recompute_all_frames();
             state.reset_training();
             state.rebuild_model_graph_and_codegen();
         }
@@ -87,7 +87,7 @@ impl IngestView {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("🔄 Reset to Demo Dataset").clicked() {
                     state.load_demo_dataset();
-                    state.recompute_all_features();
+                    state.recompute_all_frames();
                     state.rebuild_model_graph_and_codegen();
                 }
                 ui.label(format!("Total Dataset Samples: {}", state.samples.len()));
@@ -164,20 +164,15 @@ impl IngestView {
                         let id = state.next_sample_id;
                         state.next_sample_id += 1;
 
-                        let feats = state.extract_features_from_waveform(&self.live_sensor_history);
-                        let q_feats: Vec<i8> = feats
-                            .iter()
-                            .map(|&f| ((f * 127.0).round().clamp(-128.0, 127.0)) as i8)
-                            .collect();
-
                         state.samples.push(crate::state::DatasetSample {
                             id,
                             label: self.current_label.clone(),
                             class_idx,
                             raw_waveform: self.live_sensor_history.clone(),
-                            features: feats,
-                            quantized_features: q_feats,
+                            frames: Vec::new(),
+                            quantized_frames: Vec::new(),
                         });
+                        state.recompute_all_frames();
                         state.rebuild_model_graph_and_codegen();
                     }
                 }
@@ -356,7 +351,12 @@ impl IngestView {
                                 });
 
                                 ui.label(format!("{} samples", sample.raw_waveform.len()));
-                                ui.label(format!("{} Mel bins", sample.features.len()));
+                                let num_bins = sample.frames.first().map(|f| f.len()).unwrap_or(0);
+                                ui.label(format!(
+                                    "{} Mel bins × {} frames",
+                                    num_bins,
+                                    sample.frames.len()
+                                ));
 
                                 ui.push_id(sample.id, |ui| {
                                     if ui.button("🗑 Delete").clicked() {
@@ -430,7 +430,11 @@ mod tests {
         assert_eq!(state.classes[imported[1].class_idx], "recoil_anomaly");
 
         // Features and codegen must be refreshed for the newly imported samples.
-        assert_eq!(imported[0].features.len(), state.dsp.num_mel_bins);
+        assert_eq!(
+            imported[0].frames.len(),
+            crate::state::StudioState::num_frames_for_config(&state.dsp)
+        );
+        assert_eq!(imported[0].frames[0].len(), state.dsp.num_mel_bins);
         assert!(!state.generated_rust_code.is_empty());
         assert_eq!(state.bias_fc2.len(), state.classes.len());
 

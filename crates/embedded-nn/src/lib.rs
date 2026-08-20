@@ -73,9 +73,16 @@ pub use types::{
     TensorView, TensorViewPadding, Tile,
 };
 
-pub use convolution::{convolve_1_x_n_s8, transpose_conv_s8};
+pub use convolution::{
+    convolve_1_x_n_s8, convolve_per_channel_s8, convolve_s8, depthwise_conv_per_channel_s8,
+    transpose_conv_s8,
+};
 pub use float_ops::{f16_to_f32, f32_to_f16};
-pub use fully_connected::{batch_matmul_s8, batch_matmul_s16};
+pub use fully_connected::{
+    batch_matmul_s8, batch_matmul_s16, fully_connected_per_channel_s8, fully_connected_s8,
+};
+pub use pooling::{avg_pool_s8, max_pool_s8};
 pub use recurrent::{LstmGateParams, lstm_step_s8_s16, lstm_step_s16, svdf_s8, svdf_state_s16_s8};
 pub use simd::{vec_dot_s8, vec_dot_s16};
+pub use softmax::softmax_s8;
 pub use subbyte::{convolve_s4, fully_connected_s4, pack_s4_pair, unpack_s4_pair};

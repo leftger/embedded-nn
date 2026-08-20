@@ -108,6 +108,15 @@ pub struct TensorDesc {
     pub quant: QuantParams,
 }
 
+/// Per-channel (per-output-channel) requantization parameters for a weight tensor, as an
+/// alternative to `TensorDesc.quant`'s single per-tensor multiplier/shift. One entry per
+/// output channel, matching the runtime's `PerChannelQuantParams`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PerChannelQuant {
+    pub multipliers: Vec<i32>,
+    pub shifts: Vec<i32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum OpPayload {
     FullyConnected {
@@ -115,6 +124,7 @@ pub enum OpPayload {
         packed_s4: Option<Vec<i8>>,
         bias: Option<Vec<i32>>,
         activation: ActivationType,
+        per_channel_quant: Option<PerChannelQuant>,
     },
     Conv2D {
         kernel_h: usize,
@@ -129,6 +139,7 @@ pub enum OpPayload {
         packed_s4: Option<Vec<i8>>,
         bias: Option<Vec<i32>>,
         activation: ActivationType,
+        per_channel_quant: Option<PerChannelQuant>,
     },
     DepthwiseConv2D {
         kernel_h: usize,
@@ -137,9 +148,13 @@ pub enum OpPayload {
         stride_w: usize,
         pad_h: usize,
         pad_w: usize,
+        /// Channel multiplier: `output_channels = input_channels * ch_mult`, matching the
+        /// runtime's `DwConvParams.ch_mult`.
+        ch_mult: usize,
         weights: Vec<i8>,
         bias: Option<Vec<i32>>,
         activation: ActivationType,
+        per_channel_quant: Option<PerChannelQuant>,
     },
     MaxPool2D {
         pool_h: usize,
@@ -169,6 +184,23 @@ pub enum OpPayload {
         input_weights: Vec<i8>,
         recurrent_weights: Vec<i8>,
         bias: Vec<i32>,
+    },
+    Conv1D {
+        kernel_w: usize,
+        stride_w: usize,
+        pad_w: usize,
+        dilation_w: usize,
+        weights: Vec<i8>,
+        bias: Option<Vec<i32>>,
+        activation: ActivationType,
+    },
+    Svdf {
+        rank: usize,
+        memory_size: usize,
+        weights_feature: Vec<i8>,
+        weights_time: Vec<i8>,
+        bias: Option<Vec<i32>>,
+        activation: ActivationType,
     },
 }
 
@@ -209,6 +241,7 @@ impl ModelGraph {
                     weights,
                     packed_s4,
                     bias,
+                    per_channel_quant,
                     ..
                 } => {
                     if let Some(s4) = packed_s4 {
@@ -218,12 +251,16 @@ impl ModelGraph {
                     }
                     if let Some(b) = bias {
                         total += b.len() * 4;
+                    }
+                    if let Some(pcq) = per_channel_quant {
+                        total += (pcq.multipliers.len() + pcq.shifts.len()) * 4;
                     }
                 }
                 OpPayload::Conv2D {
                     weights,
                     packed_s4,
                     bias,
+                    per_channel_quant,
                     ..
                 } => {
                     if let Some(s4) = packed_s4 {
@@ -234,11 +271,22 @@ impl ModelGraph {
                     if let Some(b) = bias {
                         total += b.len() * 4;
                     }
+                    if let Some(pcq) = per_channel_quant {
+                        total += (pcq.multipliers.len() + pcq.shifts.len()) * 4;
+                    }
                 }
-                OpPayload::DepthwiseConv2D { weights, bias, .. } => {
+                OpPayload::DepthwiseConv2D {
+                    weights,
+                    bias,
+                    per_channel_quant,
+                    ..
+                } => {
                     total += weights.len();
                     if let Some(b) = bias {
                         total += b.len() * 4;
+                    }
+                    if let Some(pcq) = per_channel_quant {
+                        total += (pcq.multipliers.len() + pcq.shifts.len()) * 4;
                     }
                 }
                 OpPayload::LstmStep {
@@ -249,9 +297,74 @@ impl ModelGraph {
                 } => {
                     total += input_weights.len() + recurrent_weights.len() + bias.len() * 4;
                 }
+                OpPayload::Conv1D { weights, bias, .. } => {
+                    total += weights.len();
+                    if let Some(b) = bias {
+                        total += b.len() * 4;
+                    }
+                }
+                OpPayload::Svdf {
+                    weights_feature,
+                    weights_time,
+                    bias,
+                    ..
+                } => {
+                    total += weights_feature.len() + weights_time.len();
+                    if let Some(b) = bias {
+                        total += b.len() * 4;
+                    }
+                }
                 _ => {}
             }
         }
         total
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_total_weights_size_bytes_conv1d() {
+        let mut graph = ModelGraph::new("conv1d_net");
+        graph.layers.push(LayerNode {
+            id: 0,
+            name: "conv1".into(),
+            inputs: vec![0],
+            outputs: vec![1],
+            op: OpPayload::Conv1D {
+                kernel_w: 3,
+                stride_w: 1,
+                pad_w: 0,
+                dilation_w: 1,
+                weights: vec![0; 24], // 8 out_channels * 3 kernel_w * 1 in_channel
+                bias: Some(vec![0; 8]),
+                activation: ActivationType::Relu,
+            },
+        });
+
+        assert_eq!(graph.total_weights_size_bytes(), 24 + 8 * 4);
+    }
+
+    #[test]
+    fn test_total_weights_size_bytes_svdf() {
+        let mut graph = ModelGraph::new("svdf_net");
+        graph.layers.push(LayerNode {
+            id: 0,
+            name: "svdf1".into(),
+            inputs: vec![0],
+            outputs: vec![1],
+            op: OpPayload::Svdf {
+                rank: 1,
+                memory_size: 4,
+                weights_feature: vec![0; 16], // feature_dim(16) * input_dim(1)
+                weights_time: vec![0; 64],    // feature_dim(16) * memory_size(4)
+                bias: Some(vec![0; 16]),
+                activation: ActivationType::None,
+            },
+        });
+
+        assert_eq!(graph.total_weights_size_bytes(), 16 + 64 + 16 * 4);
     }
 }

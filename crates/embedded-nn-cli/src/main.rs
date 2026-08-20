@@ -31,6 +31,14 @@ enum Commands {
         #[arg(short, long)]
         model: PathBuf,
     },
+    /// Import a TensorFlow Lite (.tflite) model into embedded-nn's JSON ModelGraph format,
+    /// ready for `enn codegen`
+    Import {
+        #[arg(short, long)]
+        tflite: PathBuf,
+        #[arg(short, long)]
+        out: PathBuf,
+    },
     /// List connected USB devices for live streaming
     Devices,
     /// Work with JSON Lines dataset interchange files
@@ -94,6 +102,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
             println!("==================================================");
+        }
+        Commands::Import { tflite, out } => {
+            let bytes = fs::read(&tflite)?;
+            let graph = embedded_nn_tflite::import_tflite(&bytes)
+                .map_err(|e| format!("failed to import {:?}: {}", tflite, e))?;
+            let json = serde_json::to_string_pretty(&graph)?;
+            fs::write(&out, json)?;
+            println!(
+                "Imported {:?} ({} layers) -> {:?}",
+                tflite,
+                graph.layers.len(),
+                out
+            );
         }
         Commands::Devices => {
             println!("Scanning for USB devices...");
