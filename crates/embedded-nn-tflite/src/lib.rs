@@ -269,7 +269,8 @@ fn read_i32_bias_buffer(
         .ok_or(ImportError::MissingField("bias buffer data"))?;
     let bytes: Vec<u8> = data.iter().collect();
     // `as_chunks` isn't available at this workspace's MSRV (1.87); chunks_exact is fine here.
-    #[allow(clippy::chunks_exact_to_as_chunks)]
+    // `unknown_lints` allowed too since this lint doesn't exist on every clippy version CI runs.
+    #[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
     let chunks = bytes.chunks_exact(4);
     Ok(chunks
         .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]))
