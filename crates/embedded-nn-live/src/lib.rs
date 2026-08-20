@@ -1,5 +1,7 @@
+pub mod dataset;
 pub mod protocol;
 
+pub use dataset::{DatasetParseError, DatasetRecord, parse_jsonl};
 pub use protocol::{InferenceRequest, InferenceResponse, LiveMessage, SensorFrame};
 
 #[cfg(feature = "std")]
