@@ -56,6 +56,7 @@ pub mod slice;
 pub mod softmax;
 pub mod subbyte;
 pub mod support;
+pub mod tensor;
 pub mod transpose;
 pub mod types;
 
@@ -95,4 +96,9 @@ pub use simd::{vec_dot_s8, vec_dot_s16};
 pub use slice::strided_slice_s8;
 pub use softmax::softmax_s8;
 pub use subbyte::{convolve_s4, fully_connected_s4, pack_s4_pair, unpack_s4_pair};
+pub use tensor::{
+    Quantized, StaticTensorView, Tensor2D, Tensor4D, avg_pool2d_forward, conv2d_forward,
+    depthwise_conv2d_forward, fully_connected_forward, max_pool2d_forward, relu_forward,
+    relu6_forward, softmax_forward,
+};
 pub use transpose::{transpose_2d_s8, transpose_nd_s8, transpose_spatial_s8};

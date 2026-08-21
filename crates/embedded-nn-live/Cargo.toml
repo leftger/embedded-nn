@@ -12,7 +12,7 @@ default = ["std"]
 std = ["dep:serde", "serde/std", "dep:nusb", "dep:serde_json", "dep:thiserror"]
 
 [dependencies]
-serde = { workspace = true, default-features = false, features = ["alloc", "derive"], optional = true }
+serde = { workspace = true, features = ["alloc", "derive"], optional = true }
 serde_json = { workspace = true, optional = true }
 nusb = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }

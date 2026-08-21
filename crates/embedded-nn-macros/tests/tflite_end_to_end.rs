@@ -112,3 +112,24 @@ fn add_then_rank2_transpose_executes_with_two_graph_inputs() {
     // transpose reorders row-major indices as [0,3,1,4,2,5].
     assert_eq!(output, [-9, 9, -3, 15, 3, 21]);
 }
+
+#[test]
+fn test_predict_tensor_2d_and_4d_macro_interface() {
+    use embedded_nn::{Tensor2D, Tensor4D};
+    use sine::SineFc;
+    use tinyconv::TinyConv;
+
+    // Test Tensor2D predict on SineFc
+    let mut arena_sine = [0u8; SineFc::ARENA_SIZE];
+    let input_2d =
+        Tensor2D::<i8, 1, 1>::new([[64]], [SineFc::INPUT_SCALE], [SineFc::INPUT_ZERO_POINT]);
+    let output_2d = SineFc::predict_tensor(&input_2d, &mut arena_sine).unwrap();
+    assert_eq!(output_2d.data, [[64]]);
+
+    // Test Tensor4D predict on TinyConv
+    let mut arena_conv = [0u8; TinyConv::ARENA_SIZE];
+    let input_4d =
+        Tensor4D::<i8, 1, 49, 40, 1>::zero([TinyConv::INPUT_SCALE], [TinyConv::INPUT_ZERO_POINT]);
+    let output_4d = TinyConv::predict_tensor(&input_4d, &mut arena_conv).unwrap();
+    assert_eq!(output_4d.as_slice(), &[-64, -64, -64, -64]);
+}

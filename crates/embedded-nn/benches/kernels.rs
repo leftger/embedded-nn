@@ -161,12 +161,69 @@ fn bench_requantize(c: &mut Criterion) {
     });
 }
 
+fn bench_tensor_conv2d_forward(c: &mut Criterion) {
+    use embedded_nn::{Tensor4D, conv2d_forward};
+
+    let input = Tensor4D::<i8, 1, 8, 8, 4>::zero([0.1], [0]);
+    let kernel = Tensor4D::<i8, 8, 3, 3, 4, 1>::zero([0.1], [0]);
+    let conv_params = ConvParams {
+        input_offset: 0,
+        output_offset: 0,
+        stride: Tile::new(1, 1),
+        padding: Padding2D::new(0, 0, 0, 0),
+        dilation: Tile::new(1, 1),
+        activation: Activation::int8_unconstrained(),
+    };
+    let quant = PerTensorQuantParams::new(1073741824, 1);
+
+    c.bench_function("tensor4d_conv2d_forward_8x8x4_to_6x6x8", |b| {
+        b.iter(|| {
+            conv2d_forward::<1, 8, 8, 4, 8, 3, 3, 6, 6, 1>(
+                black_box(&input),
+                black_box(&kernel),
+                None,
+                black_box(&conv_params),
+                None,
+                Some(black_box(&quant)),
+                1.0,
+                0,
+            )
+            .unwrap();
+        });
+    });
+}
+
+fn bench_tensor_fully_connected_forward(c: &mut Criterion) {
+    use embedded_nn::{FusedActivation, Tensor2D, fully_connected_forward};
+
+    let input = Tensor2D::<i8, 1, 16>::zero([0.1], [0]);
+    let weights = Tensor2D::<i8, 16, 16>::zero([0.1], [0]);
+
+    c.bench_function("tensor2d_fc_forward_16x16", |b| {
+        b.iter(|| {
+            fully_connected_forward::<1, 16, 16>(
+                black_box(&input),
+                black_box(&weights),
+                None,
+                1.0,
+                0,
+                FusedActivation::None,
+                1073741824,
+                1,
+            )
+            .unwrap();
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_fully_connected_s8,
     bench_fully_connected_per_channel_s8,
     bench_convolve_1_x_n_s8,
     bench_softmax_s8,
-    bench_requantize
+    bench_requantize,
+    bench_tensor_conv2d_forward,
+    bench_tensor_fully_connected_forward
 );
 criterion_main!(benches);
