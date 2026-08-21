@@ -1,4 +1,6 @@
-use embedded_nn::feature_dsp::{FeatureDspConfig, WindowKind, extract_mel_sequence, quantize_mel_s8};
+use embedded_nn::feature_dsp::{
+    FeatureDspConfig, WindowKind, extract_mel_sequence, quantize_mel_s8,
+};
 use embedded_nn_codegen::RustCodeGenerator;
 use embedded_nn_compiler::arena::{ArenaPlan, ArenaScheduler};
 use embedded_nn_compiler::builder::ModelBuilder;
@@ -1095,25 +1097,61 @@ impl StudioState {
         }
     }
 
-    /// Host Burn trainer: float Adam then PTQ, or fake-quant QAT then PTQ. DenseMLP only.
+    /// Host Burn trainer: float Adam then PTQ, or fake-quant QAT then PTQ.
     pub fn run_burn_training(&mut self, qat: bool) {
-        if self.model_source.is_imported() || self.model_config.arch != ModelArchitecture::DenseMLP
-        {
+        if self.model_source.is_imported() {
             return;
         }
         let num_inputs = self.dsp.num_mel_bins;
         let mut features = Vec::new();
         let mut labels = Vec::new();
+        let expected_frames = Self::num_frames_for_config(&self.dsp);
         for sample in &self.samples {
             if let Some(idx) = self.classes.iter().position(|c| c == &sample.label) {
-                features.push(Self::mean_pool_frames(&sample.frames, num_inputs));
+                match self.model_config.arch {
+                    ModelArchitecture::DenseMLP => {
+                        features.push(Self::mean_pool_frames(&sample.frames, num_inputs));
+                    }
+                    ModelArchitecture::TinyConv1D | ModelArchitecture::RecurrentSVDF => {
+                        if sample.frames.len() != expected_frames {
+                            continue;
+                        }
+                        let mut flat = Vec::with_capacity(expected_frames * num_inputs);
+                        if self.model_config.arch == ModelArchitecture::TinyConv1D {
+                            for f in 0..num_inputs {
+                                for t in 0..expected_frames {
+                                    flat.push(sample.frames[t][f]);
+                                }
+                            }
+                        } else {
+                            for frame in &sample.frames {
+                                flat.extend_from_slice(frame);
+                            }
+                        }
+                        features.push(flat);
+                    }
+                }
                 labels.push(idx);
             }
         }
         if features.is_empty() {
             return;
         }
-        let report = embedded_nn_train::train_dense_mlp(
+        let (kernel_w, _) = Self::conv1d_shape_for_config(&self.dsp);
+        let arch = match self.model_config.arch {
+            ModelArchitecture::DenseMLP => embedded_nn_train::TrainArch::DenseMlp,
+            ModelArchitecture::TinyConv1D => embedded_nn_train::TrainArch::Conv1d {
+                num_frames: expected_frames,
+                kernel_w,
+                out_channels: CONV1D_OUT_CHANNELS,
+            },
+            ModelArchitecture::RecurrentSVDF => embedded_nn_train::TrainArch::Svdf {
+                num_frames: expected_frames,
+                rank: SVDF_RANK,
+                memory_size: SVDF_MEMORY_SIZE,
+            },
+        };
+        let report = embedded_nn_train::train_model(
             &features,
             &labels,
             &embedded_nn_train::TrainConfig {
@@ -1127,12 +1165,22 @@ impl StudioState {
                 } else {
                     embedded_nn_train::TrainMode::Ptq
                 },
+                arch,
             },
         );
         self.weights_fc1 = report.weights_fc1;
         self.bias_fc1 = report.bias_fc1;
         self.weights_fc2 = report.weights_fc2;
         self.bias_fc2 = report.bias_fc2;
+        if !report.conv1d_weights.is_empty() {
+            self.conv1d_weights = report.conv1d_weights;
+            self.conv1d_bias = report.conv1d_bias;
+        }
+        if !report.svdf_weights_feature.is_empty() {
+            self.svdf_weights_feature = report.svdf_weights_feature;
+            self.svdf_weights_time = report.svdf_weights_time;
+            self.svdf_bias = report.svdf_bias;
+        }
         self.train_loss_history.push(report.final_loss);
         self.current_epoch = self.model_config.epochs;
         self.is_training = false;
@@ -1934,7 +1982,9 @@ mod tests {
         let mut state = StudioState::default();
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../crates/embedded-nn-tflite/fixtures/constructed/sine_fc_int8.tflite");
-        state.import_tflite_path(&path).expect("import sine fixture");
+        state
+            .import_tflite_path(&path)
+            .expect("import sine fixture");
         state.test_input_vector = vec![64];
         state.compare_imported_tflite_golden();
         let status = state.golden_status.expect("status");

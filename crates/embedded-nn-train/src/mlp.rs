@@ -10,16 +10,54 @@ use embedded_nn_compiler::ir::ModelGraph;
 
 use crate::quantize::{ptq_dense_mlp, quantize_features};
 
-type InnerB = NdArray<f32>;
-type TrainB = Autodiff<InnerB>;
+pub(crate) type InnerB = NdArray<f32>;
+pub(crate) type TrainB = Autodiff<InnerB>;
 
 /// PTQ after float training, or fake-quant QAT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrainMode {
     /// Float Adam, then existing `quant.rs` PTQ.
     Ptq,
-    /// Fake-quant s8 weights (STE) during Adam, then PTQ.
+    /// Fake-quant s8 weights and activations (STE) during Adam, then PTQ.
     Qat,
+}
+
+/// Architecture trained on the host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrainArch {
+    /// Mean-pooled Mel vector MLP.
+    DenseMlp,
+    /// Temporal conv over frames, then MLP head.
+    Conv1d {
+        /// Analysis frames.
+        num_frames: usize,
+        /// Kernel width in frames.
+        kernel_w: usize,
+        /// Conv output channels.
+        out_channels: usize,
+    },
+    /// SVDF delay-line over frames, then linear head.
+    Svdf {
+        /// Analysis frames.
+        num_frames: usize,
+        /// Rank.
+        rank: usize,
+        /// Delay-line depth.
+        memory_size: usize,
+    },
+}
+
+/// Argmax agreement between float, PTQ, and QAT host-integer graphs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuantCompare {
+    /// Samples compared.
+    pub n: usize,
+    /// PTQ host-int argmax matches float.
+    pub ptq_agrees_float: usize,
+    /// QAT host-int argmax matches float.
+    pub qat_agrees_float: usize,
+    /// QAT host-int argmax matches PTQ.
+    pub qat_agrees_ptq: usize,
 }
 
 /// Hyperparameters for the host trainer.
@@ -37,6 +75,8 @@ pub struct TrainConfig {
     pub epochs: usize,
     /// PTQ or QAT.
     pub mode: TrainMode,
+    /// Network family.
+    pub arch: TrainArch,
 }
 
 /// Trained float weights plus the quantized graph.
@@ -50,6 +90,16 @@ pub struct TrainReport {
     pub weights_fc2: Vec<f32>,
     /// FC2 bias.
     pub bias_fc2: Vec<f32>,
+    /// Conv1D weights `[out, k, in]` when trained.
+    pub conv1d_weights: Vec<f32>,
+    /// Conv1D bias.
+    pub conv1d_bias: Vec<f32>,
+    /// SVDF feature weights.
+    pub svdf_weights_feature: Vec<f32>,
+    /// SVDF time weights.
+    pub svdf_weights_time: Vec<f32>,
+    /// SVDF bias.
+    pub svdf_bias: Vec<f32>,
     /// Integer graph after PTQ.
     pub graph: ModelGraph,
     /// Last-epoch mean cross-entropy.
@@ -63,7 +113,12 @@ struct Mlp<B: Backend> {
 }
 
 impl Mlp<TrainB> {
-    fn new(num_inputs: usize, hidden: usize, num_classes: usize, device: &<TrainB as Backend>::Device) -> Self {
+    fn new(
+        num_inputs: usize,
+        hidden: usize,
+        num_classes: usize,
+        device: &<TrainB as Backend>::Device,
+    ) -> Self {
         Self {
             fc1: LinearConfig::new(num_inputs, hidden).init(device),
             fc2: LinearConfig::new(hidden, num_classes).init(device),
@@ -74,11 +129,12 @@ impl Mlp<TrainB> {
         let w1 = maybe_fake_quant(self.fc1.weight.val(), fake_quant);
         let w2 = maybe_fake_quant(self.fc2.weight.val(), fake_quant);
         let h = relu(x.matmul(w1) + reshape_bias(self.fc1.bias.as_ref().map(|b| b.val())));
+        let h = maybe_fake_quant_act(h, fake_quant);
         h.matmul(w2) + reshape_bias(self.fc2.bias.as_ref().map(|b| b.val()))
     }
 }
 
-fn relu(x: Tensor<TrainB, 2>) -> Tensor<TrainB, 2> {
+pub(crate) fn relu(x: Tensor<TrainB, 2>) -> Tensor<TrainB, 2> {
     x.clamp_min(0)
 }
 
@@ -89,8 +145,22 @@ fn reshape_bias(bias: Option<Tensor<TrainB, 1>>) -> Tensor<TrainB, 2> {
     }
 }
 
-fn maybe_fake_quant(w: Tensor<TrainB, 2>, enable: bool) -> Tensor<TrainB, 2> {
+pub(crate) fn maybe_fake_quant(w: Tensor<TrainB, 2>, enable: bool) -> Tensor<TrainB, 2> {
     if enable { fake_quant_s8(w) } else { w }
+}
+
+pub(crate) fn maybe_fake_quant_act(x: Tensor<TrainB, 2>, enable: bool) -> Tensor<TrainB, 2> {
+    if enable { fake_quant_asymmetric(x) } else { x }
+}
+
+fn fake_quant_asymmetric(x: Tensor<TrainB, 2>) -> Tensor<TrainB, 2> {
+    let vals: Vec<f32> = x.to_data().to_vec().expect("act data");
+    let min = vals.iter().copied().fold(0.0f32, f32::min).min(0.0);
+    let max = vals.iter().copied().fold(0.0f32, f32::max).max(0.0);
+    let scale = ((max - min) / 255.0).max(1e-7);
+    let zp = (-128.0 - min / scale).round().clamp(-128.0, 127.0);
+    let q = ((x.clone() / scale + zp).round().clamp(-128.0, 127.0) - zp) * scale;
+    ste(x, q)
 }
 
 fn fake_quant_s8(w: Tensor<TrainB, 2>) -> Tensor<TrainB, 2> {
@@ -105,7 +175,11 @@ fn ste(x: Tensor<TrainB, 2>, quantized: Tensor<TrainB, 2>) -> Tensor<TrainB, 2> 
     x.clone().add(quantized.sub(x).detach())
 }
 
-fn flatten_linear<B: Backend>(linear: &Linear<B>, out: usize, inn: usize) -> (Vec<f32>, Vec<f32>) {
+pub(crate) fn flatten_linear<B: Backend>(
+    linear: &Linear<B>,
+    out: usize,
+    inn: usize,
+) -> (Vec<f32>, Vec<f32>) {
     let w = linear.weight.val().into_data();
     let w_vec: Vec<f32> = w.to_vec().expect("linear weights f32");
     // Burn Linear uses `y = x @ W` with W shaped [in, out]. IR/FC is [out, in].
@@ -151,10 +225,8 @@ pub fn train_dense_mlp(
                 TensorData::new(x.clone(), [1, config.num_inputs]),
                 &device,
             );
-            let yt = Tensor::<TrainB, 1, Int>::from_data(
-                TensorData::new(vec![y as i64], [1]),
-                &device,
-            );
+            let yt =
+                Tensor::<TrainB, 1, Int>::from_data(TensorData::new(vec![y as i64], [1]), &device);
             let logits = model.forward(xt, fake_quant);
             let loss = loss_fn.forward(logits, yt);
             let value: f32 = loss.clone().into_data().to_vec::<f32>().expect("loss")[0];
@@ -181,6 +253,11 @@ pub fn train_dense_mlp(
         bias_fc1,
         weights_fc2,
         bias_fc2,
+        conv1d_weights: Vec::new(),
+        conv1d_bias: Vec::new(),
+        svdf_weights_feature: Vec::new(),
+        svdf_weights_time: Vec::new(),
+        svdf_bias: Vec::new(),
         graph,
         final_loss,
     }
@@ -236,6 +313,7 @@ mod tests {
                 learning_rate: 0.05,
                 epochs: 40,
                 mode: TrainMode::Ptq,
+                arch: TrainArch::DenseMlp,
             },
         );
         let mut host = HostInterpreter::new(&report.graph).unwrap();
@@ -261,6 +339,7 @@ mod tests {
                 learning_rate: 0.05,
                 epochs: 20,
                 mode: TrainMode::Qat,
+                arch: TrainArch::DenseMlp,
             },
         );
         let mut host = HostInterpreter::new(&report.graph).unwrap();

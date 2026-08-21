@@ -99,7 +99,11 @@ impl UsbBridge {
         nusb::list_devices()
             .wait()
             .map_err(TransportError::Enumeration)
-            .map(|devices| devices.map(|device| Self::from_device_info(&device)).collect())
+            .map(|devices| {
+                devices
+                    .map(|device| Self::from_device_info(&device))
+                    .collect()
+            })
     }
 
     pub fn enumerate_nn_agents() -> Result<Vec<Self>, TransportError> {
@@ -119,7 +123,12 @@ impl UsbBridge {
 
     pub fn display_name(&self) -> String {
         self.product_string.clone().unwrap_or_else(|| {
-            format!("{:04x}:{:04x} ({})", self.vendor_id, self.product_id, self.stable_id())
+            format!(
+                "{:04x}:{:04x} ({})",
+                self.vendor_id,
+                self.product_id,
+                self.stable_id()
+            )
         })
     }
 
@@ -277,7 +286,9 @@ impl UsbTransportConfig {
             ));
         }
         if self.transfer_size == 0 {
-            return Err(TransportError::InvalidConfig("transfer_size must be non-zero"));
+            return Err(TransportError::InvalidConfig(
+                "transfer_size must be non-zero",
+            ));
         }
         if self.timeout.is_zero() {
             return Err(TransportError::InvalidConfig("timeout must be non-zero"));

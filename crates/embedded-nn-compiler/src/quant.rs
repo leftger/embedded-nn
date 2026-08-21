@@ -1,4 +1,4 @@
-use crate::ir::{ElementwiseAddQuant, QuantParams};
+use crate::ir::{ElementwiseAddQuant, ElementwiseMulQuant, QuantParams};
 use embedded_nn::subbyte::pack_s4_pair;
 
 /// Calculate symmetric s8 quantization parameters from float min/max
@@ -98,6 +98,27 @@ pub fn calculate_elementwise_add_quant(
         input2_multiplier,
         input2_shift,
         left_shift: LEFT_SHIFT,
+        output_offset: output.zero_point,
+        output_multiplier,
+        output_shift,
+    }
+}
+
+/// `real_multiplier = input1.scale * input2.scale / output.scale` for quantized MUL.
+pub fn calculate_elementwise_mul_quant(
+    input1: &QuantParams,
+    input2: &QuantParams,
+    output: &QuantParams,
+) -> ElementwiseMulQuant {
+    let real_multiplier = if output.scale > 1e-12 {
+        (input1.scale * input2.scale) / output.scale
+    } else {
+        0.0
+    };
+    let (output_multiplier, output_shift) = quantize_multiplier(real_multiplier);
+    ElementwiseMulQuant {
+        input1_offset: -input1.zero_point,
+        input2_offset: -input2.zero_point,
         output_offset: output.zero_point,
         output_multiplier,
         output_shift,

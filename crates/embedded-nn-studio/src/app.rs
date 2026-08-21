@@ -118,16 +118,16 @@ impl eframe::App for EmbeddedNnStudioApp {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| match self.current_tab {
-            StudioTab::Ingest => {
-                self.ingest_view
-                    .show(ui, &mut self.state, &mut self.device_link)
-            }
+            StudioTab::Ingest => self
+                .ingest_view
+                .show(ui, &mut self.state, &mut self.device_link),
             StudioTab::Dsp => self.dsp_view.show(ui, &mut self.state),
             StudioTab::Train => self.train_view.show(ui, &mut self.state),
             StudioTab::Arena => self.arena_view.show(ui, &mut self.state),
-            StudioTab::Codegen => self
-                .codegen_view
-                .show(ui, &mut self.state, self.device_link.as_ref()),
+            StudioTab::Codegen => {
+                self.codegen_view
+                    .show(ui, &mut self.state, self.device_link.as_ref())
+            }
         });
 
         // Request continuous repaint for smooth 60 FPS live oscilloscope stream and training progress
@@ -135,7 +135,10 @@ impl eframe::App for EmbeddedNnStudioApp {
             || self.current_tab == StudioTab::Codegen
             || self.state.is_training
             || self.ingest_view.is_recording
-            || self.device_link.as_ref().is_some_and(|link| link.is_alive())
+            || self
+                .device_link
+                .as_ref()
+                .is_some_and(|link| link.is_alive())
         {
             ctx.request_repaint_after(Duration::from_millis(16));
         }

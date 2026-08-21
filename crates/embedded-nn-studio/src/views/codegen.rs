@@ -56,12 +56,11 @@ impl CodegenView {
                     )
                     .clicked()
                 {
-                    self.copy_status = Some(
-                        match state.export_model_bundle(Path::new("model.rs")) {
+                    self.copy_status =
+                        Some(match state.export_model_bundle(Path::new("model.rs")) {
                             Ok(message) => message,
                             Err(error) => error,
-                        },
-                    );
+                        });
                 }
 
                 if ui

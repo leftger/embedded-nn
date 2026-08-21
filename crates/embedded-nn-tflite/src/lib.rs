@@ -10,7 +10,8 @@
 //! - Only subgraph 0 is imported; models with control-flow subgraphs are not supported.
 //! - Supported operators: `FULLY_CONNECTED`, `CONV_2D` (1-high kernels import as `Conv1D`),
 //!   `DEPTHWISE_CONV_2D`, `MAX_POOL_2D`, `AVERAGE_POOL_2D`, `SOFTMAX`, `RESHAPE`, `ADD`,
-//!   `TRANSPOSE`, `PAD`/`PADV2`, `MEAN`, and `SVDF`.
+//!   `TRANSPOSE` (general rank-1..4 perms), `PAD`/`PADV2`, `MEAN`, `SVDF`, `MUL`,
+//!   `CONCATENATION` (channel axis), `STRIDED_SLICE`, and BASIC `LSTM`.
 //! - SAME padding is represented exactly, including odd totals where bottom/right differ from
 //!   top/left. VALID padding is represented as zero on every side.
 //! - Per-channel quantization is respected for `CONV_2D`/`DEPTHWISE_CONV_2D`/`FULLY_CONNECTED`
@@ -227,6 +228,36 @@ pub fn import_tflite(bytes: &[u8]) -> Result<ModelGraph, ImportError> {
                 &output_tensor,
                 &layer_name,
             )?,
+            tflite::BuiltinOperator::MUL => import_mul(
+                &mut builder,
+                &operator,
+                &tensors,
+                &tensor_ids,
+                in_id,
+                &output_tensor,
+                &layer_name,
+            )?,
+            tflite::BuiltinOperator::CONCATENATION => {
+                import_concat(&mut builder, &operator, &tensors, &tensor_ids, &layer_name)?
+            }
+            tflite::BuiltinOperator::STRIDED_SLICE => import_strided_slice(
+                &mut builder,
+                &operator,
+                &tensors,
+                &buffers,
+                in_id,
+                &layer_name,
+            )?,
+            tflite::BuiltinOperator::LSTM => import_lstm(
+                &mut builder,
+                &operator,
+                &tensors,
+                &buffers,
+                in_id,
+                input_scale,
+                &output_tensor,
+                &layer_name,
+            )?,
             other => {
                 return Err(ImportError::UnsupportedOperator(
                     other.variant_name().unwrap_or("UNKNOWN"),
@@ -242,10 +273,12 @@ pub fn import_tflite(bytes: &[u8]) -> Result<ModelGraph, ImportError> {
                 | tflite::BuiltinOperator::AVERAGE_POOL_2D
                 | tflite::BuiltinOperator::SOFTMAX
                 | tflite::BuiltinOperator::RESHAPE
-                |             tflite::BuiltinOperator::TRANSPOSE
+                | tflite::BuiltinOperator::TRANSPOSE
                 | tflite::BuiltinOperator::PAD
                 | tflite::BuiltinOperator::PADV2
                 | tflite::BuiltinOperator::MEAN
+                | tflite::BuiltinOperator::CONCATENATION
+                | tflite::BuiltinOperator::STRIDED_SLICE
         ) {
             let (multiplier, shift) = quantize_multiplier(out_scale);
             builder
@@ -910,26 +943,16 @@ fn import_transpose(
         .iter()
         .collect();
     let input_rank = input_dims.len();
-    if permutation.len() != input_rank {
+    if permutation.len() != input_rank || input_rank == 0 || input_rank > 4 {
         return Err(ImportError::UnsupportedConfiguration(format!(
             "TRANSPOSE permutation rank {} does not match input rank {input_rank}",
             permutation.len()
         )));
     }
-    match permutation.as_slice() {
-        [1, 0] => {}
-        [0, 2, 1, 3] => {
-            if input_dims[0] != 1 {
-                return Err(ImportError::UnsupportedConfiguration(
-                    "rank-4 TRANSPOSE currently requires batch size 1".into(),
-                ));
-            }
-        }
-        _ => {
-            return Err(ImportError::UnsupportedConfiguration(format!(
-                "unsupported TRANSPOSE permutation {permutation:?}; supported forms are [1, 0] and [0, 2, 1, 3]"
-            )));
-        }
+    if input_rank == 4 && input_dims[0] != 1 {
+        return Err(ImportError::UnsupportedConfiguration(
+            "rank-4 TRANSPOSE currently requires batch size 1".into(),
+        ));
     }
     let output_dims: Vec<i32> = output_tensor
         .shape()
@@ -1124,6 +1147,238 @@ fn import_svdf(
         weights_time,
         bias,
         activation,
+        Some(output_quant),
+    ))
+}
+
+fn import_mul(
+    builder: &mut ModelBuilder,
+    operator: &tflite::Operator,
+    tensors: &flatbuffers::Vector<flatbuffers::ForwardsUOffset<tflite::Tensor>>,
+    tensor_ids: &HashMap<usize, usize>,
+    input1_id: usize,
+    output_tensor: &tflite::Tensor,
+    name: &str,
+) -> Result<usize, ImportError> {
+    let op_inputs = operator
+        .inputs()
+        .ok_or(ImportError::MissingField("operator.inputs"))?;
+    if op_inputs.len() != 2 {
+        return Err(ImportError::UnsupportedConfiguration(
+            "MUL requires exactly two inputs".into(),
+        ));
+    }
+    let input2_idx = op_inputs.get(1) as usize;
+    let input2_id = *tensor_ids
+        .get(&input2_idx)
+        .ok_or(ImportError::UnresolvedInput(input2_idx))?;
+    convert_tensor_type(tensors.get(input2_idx).type_())?;
+    let (out_scale, out_zero_point) = read_per_tensor_quant(output_tensor)?;
+    let (multiplier, shift) = quantize_multiplier(out_scale);
+    let output_quant = QuantParams {
+        multiplier,
+        shift,
+        zero_point: out_zero_point,
+        scale: out_scale,
+    };
+    let activation = operator
+        .builtin_options_as_mul_options()
+        .map(|opts| read_activation(opts.fused_activation_function()))
+        .transpose()?
+        .unwrap_or(ActivationType::None);
+    builder
+        .add_elementwise_mul_layer(name, input1_id, input2_id, activation, output_quant)
+        .map_err(|message| ImportError::UnsupportedConfiguration(message.into()))
+}
+
+fn import_concat(
+    builder: &mut ModelBuilder,
+    operator: &tflite::Operator,
+    tensors: &flatbuffers::Vector<flatbuffers::ForwardsUOffset<tflite::Tensor>>,
+    tensor_ids: &HashMap<usize, usize>,
+    name: &str,
+) -> Result<usize, ImportError> {
+    let op_inputs = operator
+        .inputs()
+        .ok_or(ImportError::MissingField("operator.inputs"))?;
+    if op_inputs.len() < 2 {
+        return Err(ImportError::UnsupportedConfiguration(
+            "CONCATENATION requires at least two inputs".into(),
+        ));
+    }
+    let axis = operator
+        .builtin_options_as_concatenation_options()
+        .map(|o| o.axis())
+        .unwrap_or(-1);
+    let first = tensors.get(op_inputs.get(0) as usize);
+    let rank = first
+        .shape()
+        .ok_or(ImportError::MissingField("CONCAT input shape"))?
+        .len() as i32;
+    let axis = if axis < 0 { rank + axis } else { axis };
+    let channel_axis = match rank {
+        1 => 0,
+        2 => 1,
+        4 => 3,
+        _ => {
+            return Err(ImportError::UnsupportedConfiguration(
+                "CONCATENATION rank must be 1, 2, or 4".into(),
+            ));
+        }
+    };
+    if axis != channel_axis {
+        return Err(ImportError::UnsupportedConfiguration(
+            "CONCATENATION currently supports the channel axis only".into(),
+        ));
+    }
+    let mut current = *tensor_ids
+        .get(&(op_inputs.get(0) as usize))
+        .ok_or(ImportError::UnresolvedInput(op_inputs.get(0) as usize))?;
+    for i in 1..op_inputs.len() {
+        let idx = op_inputs.get(i) as usize;
+        let next = *tensor_ids
+            .get(&idx)
+            .ok_or(ImportError::UnresolvedInput(idx))?;
+        current = builder
+            .add_concat_layer(format!("{name}_{i}"), current, next)
+            .map_err(|message| ImportError::UnsupportedConfiguration(message.into()))?;
+    }
+    Ok(current)
+}
+
+fn import_strided_slice(
+    builder: &mut ModelBuilder,
+    operator: &tflite::Operator,
+    tensors: &flatbuffers::Vector<flatbuffers::ForwardsUOffset<tflite::Tensor>>,
+    buffers: &flatbuffers::Vector<flatbuffers::ForwardsUOffset<tflite::Buffer>>,
+    input_id: usize,
+    name: &str,
+) -> Result<usize, ImportError> {
+    let op_inputs = operator
+        .inputs()
+        .ok_or(ImportError::MissingField("operator.inputs"))?;
+    if op_inputs.len() < 4 {
+        return Err(ImportError::UnsupportedConfiguration(
+            "STRIDED_SLICE requires begin, end, and strides tensors".into(),
+        ));
+    }
+    let opts = operator.builtin_options_as_strided_slice_options();
+    if opts.is_some_and(|o| {
+        o.ellipsis_mask() != 0 || o.new_axis_mask() != 0 || o.shrink_axis_mask() != 0
+    }) {
+        return Err(ImportError::UnsupportedConfiguration(
+            "STRIDED_SLICE ellipsis/new_axis/shrink masks are not supported".into(),
+        ));
+    }
+    let begin_v = read_i32_buffer(&tensors.get(op_inputs.get(1) as usize), buffers)?;
+    let end_v = read_i32_buffer(&tensors.get(op_inputs.get(2) as usize), buffers)?;
+    let stride_v = read_i32_buffer(&tensors.get(op_inputs.get(3) as usize), buffers)?;
+    let mut begin = [0i32, 0, 0, 0];
+    let mut end = [1i32, 1, 1, 1];
+    let mut stride = [1i32, 1, 1, 1];
+    match begin_v.len() {
+        1 => {
+            begin[3] = begin_v[0];
+            end[3] = *end_v.first().unwrap_or(&1);
+            stride[3] = *stride_v.first().unwrap_or(&1);
+            let input = builder.tensor_desc(input_id).unwrap();
+            end[0] = input.shape.batches as i32;
+            end[1] = input.shape.height as i32;
+            end[2] = input.shape.width as i32;
+        }
+        4 => {
+            begin.copy_from_slice(&begin_v[..4]);
+            end.copy_from_slice(&end_v[..4]);
+            stride.copy_from_slice(&stride_v[..4]);
+        }
+        2 => {
+            begin[2] = begin_v[0];
+            begin[3] = begin_v[1];
+            end[2] = end_v[0];
+            end[3] = end_v[1];
+            stride[2] = stride_v.first().copied().unwrap_or(1);
+            stride[3] = stride_v.get(1).copied().unwrap_or(1);
+            end[0] = 1;
+            end[1] = 1;
+        }
+        _ => {
+            return Err(ImportError::UnsupportedConfiguration(
+                "STRIDED_SLICE rank must be 1, 2, or 4".into(),
+            ));
+        }
+    }
+    builder
+        .add_strided_slice_layer(name, input_id, begin, end, stride)
+        .map_err(|message| ImportError::UnsupportedConfiguration(message.into()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn import_lstm(
+    builder: &mut ModelBuilder,
+    operator: &tflite::Operator,
+    tensors: &flatbuffers::Vector<flatbuffers::ForwardsUOffset<tflite::Tensor>>,
+    buffers: &flatbuffers::Vector<flatbuffers::ForwardsUOffset<tflite::Buffer>>,
+    in_id: usize,
+    input_scale: f32,
+    output_tensor: &tflite::Tensor,
+    name: &str,
+) -> Result<usize, ImportError> {
+    let opts = operator
+        .builtin_options_as_lstmoptions()
+        .ok_or(ImportError::MissingField("LSTMOptions"))?;
+    if opts.kernel_type() != tflite::LSTMKernelType::BASIC {
+        return Err(ImportError::UnsupportedConfiguration(
+            "only BASIC LSTM is imported; FULL / sequence LSTM is not supported".into(),
+        ));
+    }
+    let op_inputs = operator
+        .inputs()
+        .ok_or(ImportError::MissingField("operator.inputs"))?;
+    if op_inputs.len() < 4 {
+        return Err(ImportError::UnsupportedConfiguration(
+            "BASIC LSTM requires weights and bias inputs".into(),
+        ));
+    }
+    let weight_tensor = tensors.get(op_inputs.get(2) as usize);
+    let weights = read_i8_buffer(&weight_tensor, buffers)?;
+    let bias = read_i32_bias_buffer(&tensors.get(op_inputs.get(3) as usize), buffers)?;
+    let input_dim = builder
+        .tensor_desc(in_id)
+        .map(|t| t.shape.total_elements())
+        .ok_or(ImportError::UnresolvedInput(op_inputs.get(0) as usize))?;
+    let hidden_dim = convert_shape(output_tensor)?.total_elements();
+    let expected = (input_dim + hidden_dim) * 4 * hidden_dim;
+    if weights.len() != expected {
+        return Err(ImportError::UnsupportedConfiguration(format!(
+            "BASIC LSTM weight size {} does not match (input+hidden)*4*hidden = {expected}",
+            weights.len()
+        )));
+    }
+    let cols = 4 * hidden_dim;
+    let mut input_weights = vec![0i8; 4 * hidden_dim * input_dim];
+    let mut recurrent_weights = vec![0i8; 4 * hidden_dim * hidden_dim];
+    for row in 0..(input_dim + hidden_dim) {
+        for col in 0..cols {
+            let value = weights[row * cols + col];
+            let gate = col / hidden_dim;
+            let h = col % hidden_dim;
+            if row < input_dim {
+                input_weights[gate * hidden_dim * input_dim + h * input_dim + row] = value;
+            } else {
+                let k = row - input_dim;
+                recurrent_weights[gate * hidden_dim * hidden_dim + h * hidden_dim + k] = value;
+            }
+        }
+    }
+    let weight_scales = read_scales(&weight_tensor)?;
+    let (output_quant, _) = build_output_quant(input_scale, &weight_scales, output_tensor)?;
+    Ok(builder.add_lstm_step_layer(
+        name,
+        in_id,
+        hidden_dim,
+        input_weights,
+        recurrent_weights,
+        bias,
         Some(output_quant),
     ))
 }
@@ -2093,6 +2348,7 @@ mod tests {
         build_conv2d_per_channel_model, build_fc_only_model, build_sine_fc_model,
         build_uint8_fc_model,
     };
+    use embedded_nn_compiler::builder::ModelBuilder;
 
     #[test]
     fn test_import_fc_only_model_structure() {
@@ -2370,45 +2626,17 @@ mod tests {
     }
 
     #[test]
-    fn host_interpreter_returns_explicit_unsupported_lstm_error() {
-        let mut graph = ModelGraph::new("unsupported");
-        graph.tensors = vec![
-            TensorDesc {
-                id: 0,
-                name: "input".into(),
-                shape: TensorShape::new_1d(1),
-                dtype: DataType::Int8,
-                quant: QuantParams::default(),
-            },
-            TensorDesc {
-                id: 1,
-                name: "output".into(),
-                shape: TensorShape::new_1d(1),
-                dtype: DataType::Int8,
-                quant: QuantParams::default(),
-            },
-        ];
-        graph.inputs = vec![0];
-        graph.outputs = vec![1];
-        graph.layers.push(LayerNode {
-            id: 0,
-            name: "lstm".into(),
-            inputs: vec![0],
-            outputs: vec![1],
-            op: OpPayload::LstmStep {
-                hidden_dim: 1,
-                input_weights: vec![],
-                recurrent_weights: vec![],
-                bias: vec![],
-            },
-        });
+    fn host_interpreter_runs_concat_and_mul() {
+        let mut builder = ModelBuilder::new("glue");
+        let a = builder.add_input("a", TensorShape::new_1d(2), DataType::Int8, None);
+        let b = builder.add_input("b", TensorShape::new_1d(2), DataType::Int8, None);
+        let cat = builder.add_concat_layer("cat", a, b).unwrap();
+        builder.mark_output(cat);
+        let graph = builder.build();
         let mut host = embedded_nn_compiler::HostInterpreter::new(&graph).unwrap();
-        assert!(matches!(
-            host.run(&[&[0]]),
-            Err(embedded_nn_compiler::InterpreterError::UnsupportedOp {
-                operation: "LstmStep",
-                ..
-            })
-        ));
+        assert_eq!(
+            host.run(&[&[1i8, 2], &[3i8, 4]]).unwrap()[0],
+            vec![1, 2, 3, 4]
+        );
     }
 }

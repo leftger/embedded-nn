@@ -245,6 +245,22 @@ impl RustCodeGenerator {
             .layers
             .iter()
             .any(|l| matches!(l.op, OpPayload::ElementwiseAdd { .. }));
+        let has_mul = graph
+            .layers
+            .iter()
+            .any(|l| matches!(l.op, OpPayload::ElementwiseMul { .. }));
+        let has_concat = graph
+            .layers
+            .iter()
+            .any(|l| matches!(l.op, OpPayload::Concat));
+        let has_slice = graph
+            .layers
+            .iter()
+            .any(|l| matches!(l.op, OpPayload::StridedSlice { .. }));
+        let has_lstm = graph
+            .layers
+            .iter()
+            .any(|l| matches!(l.op, OpPayload::LstmStep { .. }));
         let has_transpose_2d = graph.layers.iter().any(|l| {
             matches!(
                 l.op,
@@ -258,6 +274,14 @@ impl RustCodeGenerator {
                 l.op,
                 OpPayload::Transpose {
                     kind: TransposeKind::Spatial4D
+                }
+            )
+        });
+        let has_transpose_nd = graph.layers.iter().any(|l| {
+            matches!(
+                l.op,
+                OpPayload::Transpose {
+                    kind: TransposeKind::Nd { .. }
                 }
             )
         });
@@ -318,11 +342,26 @@ impl RustCodeGenerator {
         if has_add {
             out.push_str("    elementwise_add_s8, ElementwiseAddParams,\n");
         }
+        if has_mul {
+            out.push_str("    elementwise_mul_s8, ElementwiseMulParams,\n");
+        }
+        if has_concat {
+            out.push_str("    concatenation_s8,\n");
+        }
+        if has_slice {
+            out.push_str("    strided_slice_s8,\n");
+        }
+        if has_lstm {
+            out.push_str("    lstm_step_s8_s16, LstmGateParams,\n");
+        }
         if has_transpose_2d {
             out.push_str("    transpose_2d_s8,\n");
         }
         if has_transpose_spatial {
             out.push_str("    transpose_spatial_s8,\n");
+        }
+        if has_transpose_nd {
+            out.push_str("    transpose_nd_s8,\n");
         }
         if needs_tile {
             out.push_str("    Padding2D, Tile,\n");
@@ -366,6 +405,26 @@ impl RustCodeGenerator {
             out.push_str(&format!(
                 "pub const SVDF_STATE_BYTES: usize = {};\n\n",
                 svdf_state_total
+            ));
+        }
+
+        let mut lstm_offsets: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::new();
+        let mut lstm_hidden_total = 0usize;
+        for layer in &graph.layers {
+            if let OpPayload::LstmStep { hidden_dim, .. } = &layer.op {
+                lstm_offsets.insert(layer.id, lstm_hidden_total);
+                lstm_hidden_total += hidden_dim;
+            }
+        }
+        if has_lstm {
+            out.push_str(&format!(
+                "pub const LSTM_HIDDEN_BYTES: usize = {};\n",
+                lstm_hidden_total
+            ));
+            out.push_str(&format!(
+                "pub const LSTM_CELL_ELEMS: usize = {};\n\n",
+                lstm_hidden_total
             ));
         }
 
@@ -467,11 +526,27 @@ impl RustCodeGenerator {
                 | OpPayload::Transpose { .. }
                 | OpPayload::Reshape { .. }
                 | OpPayload::Pad { .. }
-                | OpPayload::Mean { .. } => {}
-                OpPayload::LstmStep { .. } => {
-                    out.push_str(
-                        "compile_error!(\"LstmStep code generation is not supported\");\n",
+                | OpPayload::Mean { .. }
+                | OpPayload::ElementwiseMul { .. }
+                | OpPayload::Concat
+                | OpPayload::StridedSlice { .. } => {}
+                OpPayload::LstmStep {
+                    input_weights,
+                    recurrent_weights,
+                    bias,
+                    ..
+                } => {
+                    emit_i8_array(
+                        &mut out,
+                        &format!("{}_WEIGHT_INPUT_S8", prefix),
+                        input_weights,
                     );
+                    emit_i8_array(
+                        &mut out,
+                        &format!("{}_WEIGHT_HIDDEN_S8", prefix),
+                        recurrent_weights,
+                    );
+                    emit_i32_array(&mut out, &format!("{}_BIAS_S32", prefix), bias);
                 }
             }
         }
@@ -541,6 +616,10 @@ impl RustCodeGenerator {
         out.push_str("        arena: &'a mut [u8; ARENA_SIZE_BYTES],\n");
         if has_svdf {
             out.push_str("        svdf_state: &mut [i8; SVDF_STATE_BYTES],\n");
+        }
+        if has_lstm {
+            out.push_str("        lstm_hidden: &mut [i8; LSTM_HIDDEN_BYTES],\n");
+            out.push_str("        lstm_cell: &mut [i16; LSTM_CELL_ELEMS],\n");
         }
         out.push_str("    ) -> Result<&'a [i8], &'static str> {\n");
         out.push_str(&format!("        if input.len() != {} {{\n", input_len));
@@ -895,10 +974,7 @@ impl RustCodeGenerator {
                     // identical, so this is a straight copy (in_len == out_len by definition).
                     out.push_str("        out_buf.copy_from_slice(in_buf);\n\n");
                 }
-                OpPayload::Pad {
-                    padding,
-                    pad_value,
-                } => {
+                OpPayload::Pad { padding, pad_value } => {
                     out.push_str(&format!(
                         "        pad_s8(\n            &Dims::new(1, {}, {}, {}),\n            in_buf,\n            &Tile::new({}, {}),\n            &Tile::new({}, {}),\n            {},\n            &Dims::new(1, {}, {}, {}),\n            out_buf,\n        ).map_err(|_| \"Pad s8 execution failed\")?;\n\n",
                         in_t.shape.height, in_t.shape.width, in_t.shape.channels,
@@ -951,11 +1027,58 @@ impl RustCodeGenerator {
                             in_t.shape.channels
                         ));
                     }
+                    TransposeKind::Nd { dims, perm } => {
+                        out.push_str(&format!("        let t_dims = {:?};\n", dims));
+                        out.push_str(&format!("        let t_perm = {:?};\n", perm));
+                        out.push_str(
+                            "        transpose_nd_s8(&t_dims, &t_perm, in_buf, out_buf)\n            .map_err(|_| \"TransposeNd s8 execution failed\")?;\n\n",
+                        );
+                    }
                 },
-                OpPayload::LstmStep { .. } => {
-                    out.push_str(
-                        "        compile_error!(\"LstmStep code generation is not supported\");\n",
-                    );
+                OpPayload::ElementwiseMul { quant, activation } => {
+                    out.push_str(&format!(
+                        "        let mul_params = ElementwiseMulParams {{\n            input1_offset: {},\n            input2_offset: {},\n            output_offset: {},\n            output_mult: {},\n            output_shift: {},\n            activation: {},\n        }};\n",
+                        quant.input1_offset, quant.input2_offset, quant.output_offset, quant.output_multiplier, quant.output_shift, activation_expr(activation, &out_t.quant)
+                    ));
+                    out.push_str("        elementwise_mul_s8(in_buf, in_buf2, out_buf, &mul_params)\n            .map_err(|_| \"ElementwiseMul s8 execution failed\")?;\n\n");
+                }
+                OpPayload::Concat => {
+                    let in2 = graph
+                        .tensors
+                        .iter()
+                        .find(|t| t.id == layer.inputs[1])
+                        .unwrap();
+                    out.push_str(&format!(
+                        "        concatenation_s8(\n            &Dims::new({}, {}, {}, {}),\n            in_buf,\n            &Dims::new({}, {}, {}, {}),\n            in_buf2,\n            &Dims::new({}, {}, {}, {}),\n            out_buf,\n        ).map_err(|_| \"Concat s8 execution failed\")?;\n\n",
+                        in_t.shape.batches, in_t.shape.height, in_t.shape.width, in_t.shape.channels,
+                        in2.shape.batches, in2.shape.height, in2.shape.width, in2.shape.channels,
+                        out_t.shape.batches, out_t.shape.height, out_t.shape.width, out_t.shape.channels
+                    ));
+                }
+                OpPayload::StridedSlice { begin, end, stride } => {
+                    out.push_str(&format!(
+                        "        strided_slice_s8(\n            &Dims::new({}, {}, {}, {}),\n            &{:?},\n            &{:?},\n            &{:?},\n            in_buf,\n            out_buf,\n        ).map_err(|_| \"StridedSlice s8 execution failed\")?;\n\n",
+                        in_t.shape.batches, in_t.shape.height, in_t.shape.width, in_t.shape.channels,
+                        begin, end, stride
+                    ));
+                }
+                OpPayload::LstmStep { hidden_dim, .. } => {
+                    let off = *lstm_offsets.get(&layer.id).unwrap_or(&0);
+                    out.push_str(&format!(
+                        "        let lstm_gate = LstmGateParams {{\n            input_offset: {},\n            hidden_offset: {},\n            multiplier: {},\n            shift: {},\n        }};\n",
+                        -in_t.quant.zero_point, -out_t.quant.zero_point, out_t.quant.multiplier, out_t.quant.shift
+                    ));
+                    out.push_str(&format!(
+                        "        lstm_step_s8_s16(\n            in_buf,\n            &mut lstm_hidden[{}..{}],\n            &mut lstm_cell[{}..{}],\n            &{}_WEIGHT_INPUT_S8,\n            &{}_WEIGHT_HIDDEN_S8,\n            &{}_BIAS_S32,\n            &lstm_gate,\n            32767,\n            &PerTensorQuantParams::new({}, {}),\n            {},\n            &{},\n        ).map_err(|_| \"LSTM s8 execution failed\")?;\n",
+                        off, off + hidden_dim, off, off + hidden_dim, prefix, prefix, prefix,
+                        out_t.quant.multiplier, out_t.quant.shift, out_t.quant.zero_point,
+                        activation_expr(&ActivationType::None, &out_t.quant)
+                    ));
+                    out.push_str(&format!(
+                        "        out_buf.copy_from_slice(&lstm_hidden[{}..{}]);\n\n",
+                        off,
+                        off + hidden_dim
+                    ));
                 }
             }
         }
@@ -978,6 +1101,10 @@ impl RustCodeGenerator {
         out.push_str("        arena: &mut [u8; ARENA_SIZE_BYTES],\n");
         if has_svdf {
             out.push_str("        svdf_state: &mut [i8; SVDF_STATE_BYTES],\n");
+        }
+        if has_lstm {
+            out.push_str("        lstm_hidden: &mut [i8; LSTM_HIDDEN_BYTES],\n");
+            out.push_str("        lstm_cell: &mut [i16; LSTM_CELL_ELEMS],\n");
         }
         out.push_str("        output: &mut [f32],\n");
         out.push_str("    ) -> Result<(), &'static str> {\n");
@@ -1013,6 +1140,9 @@ impl RustCodeGenerator {
         out.push_str("        let quantized_output = Self::predict(quantized_input, arena");
         if has_svdf {
             out.push_str(", svdf_state");
+        }
+        if has_lstm {
+            out.push_str(", lstm_hidden, lstm_cell");
         }
         out.push_str(")?;\n");
         out.push_str(
@@ -1825,5 +1955,49 @@ mod tests {
             RustCodeGenerator::new("SpatialTranspose").generate(&spatial_builder.build());
         assert!(spatial_code.contains("transpose_spatial_s8"));
         assert!(spatial_code.contains("Dims::new(1, 2, 3, 4)"));
+    }
+
+    #[test]
+    fn test_generate_concat_mul_lstm_and_nd_transpose() {
+        let mut builder = ModelBuilder::new("GlueNet");
+        let a = builder.add_input("a", TensorShape::new_1d(2), DataType::Int8, None);
+        let b = builder.add_input("b", TensorShape::new_1d(2), DataType::Int8, None);
+        let cat = builder.add_concat_layer("cat", a, b).unwrap();
+        builder.mark_output(cat);
+        let code = RustCodeGenerator::new("GlueNet").generate(&builder.build());
+        assert!(code.contains("concatenation_s8"));
+
+        let mut mul_builder = ModelBuilder::new("MulNet");
+        let x = mul_builder.add_input("x", TensorShape::new_1d(2), DataType::Int8, None);
+        let y = mul_builder.add_input("y", TensorShape::new_1d(2), DataType::Int8, None);
+        let z = mul_builder
+            .add_elementwise_mul_layer("mul", x, y, ActivationType::None, QuantParams::default())
+            .unwrap();
+        mul_builder.mark_output(z);
+        let mul_code = RustCodeGenerator::new("MulNet").generate(&mul_builder.build());
+        assert!(mul_code.contains("elementwise_mul_s8"));
+
+        let mut lstm_builder = ModelBuilder::new("LstmNet");
+        let xin = lstm_builder.add_input("x", TensorShape::new_1d(1), DataType::Int8, None);
+        let hout = lstm_builder.add_lstm_step_layer(
+            "cell",
+            xin,
+            1,
+            vec![1; 4],
+            vec![1; 4],
+            vec![0; 4],
+            None,
+        );
+        lstm_builder.mark_output(hout);
+        let lstm_code = RustCodeGenerator::new("LstmNet").generate(&lstm_builder.build());
+        assert!(lstm_code.contains("lstm_step_s8_s16"));
+        assert!(lstm_code.contains("LSTM_HIDDEN_BYTES"));
+
+        let mut nd_builder = ModelBuilder::new("NdT");
+        let t = nd_builder.add_input("t", TensorShape::new_2d(2, 3), DataType::Int8, None);
+        let t_out = nd_builder.add_transpose_layer("id", t, &[0, 1]).unwrap();
+        nd_builder.mark_output(t_out);
+        let nd_code = RustCodeGenerator::new("NdT").generate(&nd_builder.build());
+        assert!(nd_code.contains("transpose_nd_s8"));
     }
 }

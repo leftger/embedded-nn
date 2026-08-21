@@ -41,17 +41,18 @@ pub mod activations;
 pub mod basic_math;
 pub mod concat;
 pub mod convolution;
+#[cfg(feature = "dsp")]
+pub mod feature_dsp;
 pub mod float_ops;
 pub mod fully_connected;
 #[cfg(feature = "libm")]
 pub mod ml;
-#[cfg(feature = "dsp")]
-pub mod feature_dsp;
 pub mod pad;
 pub mod pooling;
 pub mod recurrent;
 pub mod reshape;
 pub mod simd;
+pub mod slice;
 pub mod softmax;
 pub mod subbyte;
 pub mod support;
@@ -75,7 +76,10 @@ pub use types::{
     SoftmaxParams, TensorView, TensorViewPadding, Tile,
 };
 
-pub use basic_math::{ElementwiseAddParams, elementwise_add_s8};
+pub use basic_math::{
+    ElementwiseAddParams, ElementwiseMulParams, elementwise_add_s8, elementwise_mul_s8,
+};
+pub use concat::concatenation_s8;
 pub use convolution::{
     convolve_1_x_n_s8, convolve_per_channel_s8, convolve_s8, depthwise_conv_per_channel_s8,
     transpose_conv_s8,
@@ -84,10 +88,11 @@ pub use float_ops::{f16_to_f32, f32_to_f16};
 pub use fully_connected::{
     batch_matmul_s8, batch_matmul_s16, fully_connected_per_channel_s8, fully_connected_s8,
 };
-pub use pooling::{avg_pool_s8, max_pool_s8};
 pub use pad::{pad_s8, reduce_mean_s8};
+pub use pooling::{avg_pool_s8, max_pool_s8};
 pub use recurrent::{LstmGateParams, lstm_step_s8_s16, lstm_step_s16, svdf_s8, svdf_state_s16_s8};
 pub use simd::{vec_dot_s8, vec_dot_s16};
+pub use slice::strided_slice_s8;
 pub use softmax::softmax_s8;
 pub use subbyte::{convolve_s4, fully_connected_s4, pack_s4_pair, unpack_s4_pair};
-pub use transpose::{transpose_2d_s8, transpose_spatial_s8};
+pub use transpose::{transpose_2d_s8, transpose_nd_s8, transpose_spatial_s8};

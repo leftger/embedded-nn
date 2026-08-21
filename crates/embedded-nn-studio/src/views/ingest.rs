@@ -173,9 +173,8 @@ impl IngestView {
                                 let extra = self.live_sensor_history.len() - 400;
                                 self.live_sensor_history.drain(..extra);
                             }
-                            self.link_status = format!(
-                                "t={timestamp_ms} ms ch={channel_count} samples={n}"
-                            );
+                            self.link_status =
+                                format!("t={timestamp_ms} ms ch={channel_count} samples={n}");
                         }
                     }
                     if let Some(error) = link.take_error() {

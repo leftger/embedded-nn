@@ -9,11 +9,13 @@ use crate::ir::{
     TransposeKind,
 };
 use embedded_nn::{
-    Activation, ConvParams, Dims, DwConvParams, ElementwiseAddParams, FcParams, Padding2D,
-    PerChannelQuantParams, PerTensorQuantParams, PoolParams, Tile, avg_pool_s8, convolve_1_x_n_s8,
-    convolve_per_channel_s8, convolve_s4, convolve_s8, depthwise_conv_per_channel_s8,
-    elementwise_add_s8, fully_connected_per_channel_s8, fully_connected_s4, fully_connected_s8,
-    max_pool_s8, pad_s8, reduce_mean_s8, softmax_s8, svdf_s8, transpose_2d_s8, transpose_spatial_s8,
+    Activation, ConvParams, Dims, DwConvParams, ElementwiseAddParams, ElementwiseMulParams,
+    FcParams, LstmGateParams, Padding2D, PerChannelQuantParams, PerTensorQuantParams, PoolParams,
+    Tile, avg_pool_s8, concatenation_s8, convolve_1_x_n_s8, convolve_per_channel_s8, convolve_s4,
+    convolve_s8, depthwise_conv_per_channel_s8, elementwise_add_s8, elementwise_mul_s8,
+    fully_connected_per_channel_s8, fully_connected_s4, fully_connected_s8, lstm_step_s8_s16,
+    max_pool_s8, pad_s8, reduce_mean_s8, softmax_s8, strided_slice_s8, svdf_s8, transpose_2d_s8,
+    transpose_nd_s8, transpose_spatial_s8,
 };
 use std::collections::HashMap;
 
@@ -62,6 +64,8 @@ pub struct HostInterpreter<'g> {
     plan: ArenaPlan,
     arena: Vec<u8>,
     svdf_state: HashMap<usize, Vec<i8>>,
+    lstm_hidden: HashMap<usize, Vec<i8>>,
+    lstm_cell: HashMap<usize, Vec<i16>>,
 }
 
 impl<'g> HostInterpreter<'g> {
@@ -85,6 +89,8 @@ impl<'g> HostInterpreter<'g> {
             plan,
             arena,
             svdf_state: HashMap::new(),
+            lstm_hidden: HashMap::new(),
+            lstm_cell: HashMap::new(),
         })
     }
 
@@ -96,6 +102,8 @@ impl<'g> HostInterpreter<'g> {
     /// Clears persistent external recurrent state without rebuilding the graph or arena.
     pub fn reset_external_state(&mut self) {
         self.svdf_state.clear();
+        self.lstm_hidden.clear();
+        self.lstm_cell.clear();
     }
 
     /// Executes one inference and returns owned copies of every model output, in graph order.
@@ -385,10 +393,7 @@ impl<'g> HostInterpreter<'g> {
                 output.copy_from_slice(&input);
                 Ok(())
             }
-            OpPayload::Pad {
-                padding,
-                pad_value,
-            } => pad_s8(
+            OpPayload::Pad { padding, pad_value } => pad_s8(
                 &dims(&input_tensor),
                 &input,
                 &Tile::new(padding.left as i32, padding.top as i32),
@@ -440,12 +445,60 @@ impl<'g> HostInterpreter<'g> {
                     },
                 )
             }
+            OpPayload::ElementwiseMul {
+                quant,
+                activation: kind,
+            } => {
+                if layer.inputs.len() != 2 {
+                    return Err(self.invalid(layer, "MUL requires two inputs"));
+                }
+                let input2 = self.read_tensor(layer.inputs[1])?;
+                elementwise_mul_s8(
+                    &input,
+                    &input2,
+                    &mut output,
+                    &ElementwiseMulParams {
+                        input1_offset: quant.input1_offset,
+                        input2_offset: quant.input2_offset,
+                        output_offset: quant.output_offset,
+                        output_mult: quant.output_multiplier,
+                        output_shift: quant.output_shift,
+                        activation: activation(kind),
+                    },
+                )
+            }
+            OpPayload::Concat => {
+                if layer.inputs.len() != 2 {
+                    return Err(self.invalid(layer, "Concat requires two inputs"));
+                }
+                let input2_tensor = self.tensor(layer.inputs[1])?.clone();
+                let input2 = self.read_tensor(layer.inputs[1])?;
+                concatenation_s8(
+                    &dims(&input_tensor),
+                    &input,
+                    &dims(&input2_tensor),
+                    &input2,
+                    &dims(&output_tensor),
+                    &mut output,
+                )
+            }
+            OpPayload::StridedSlice { begin, end, stride } => strided_slice_s8(
+                &dims(&input_tensor),
+                begin,
+                end,
+                stride,
+                &input,
+                &mut output,
+            ),
             OpPayload::Transpose { kind } => match kind {
                 TransposeKind::Matrix2D { rows, cols } => {
                     transpose_2d_s8(*rows, *cols, &input, &mut output)
                 }
                 TransposeKind::Spatial4D => {
                     transpose_spatial_s8(&dims(&input_tensor), &input, &mut output)
+                }
+                TransposeKind::Nd { dims, perm } => {
+                    transpose_nd_s8(dims, perm, &input, &mut output)
                 }
             },
             OpPayload::Conv1D {
@@ -511,12 +564,46 @@ impl<'g> HostInterpreter<'g> {
                     &mut output,
                 )
             }
-            OpPayload::LstmStep { .. } => {
-                return Err(InterpreterError::UnsupportedOp {
-                    layer_id: layer.id,
-                    name: layer.name.clone(),
-                    operation: "LstmStep",
-                });
+            OpPayload::LstmStep {
+                hidden_dim,
+                input_weights,
+                recurrent_weights,
+                bias,
+            } => {
+                let layer_id = layer.id;
+                let mut hidden = self
+                    .lstm_hidden
+                    .remove(&layer_id)
+                    .unwrap_or_else(|| vec![0; *hidden_dim]);
+                let mut cell = self
+                    .lstm_cell
+                    .remove(&layer_id)
+                    .unwrap_or_else(|| vec![0; *hidden_dim]);
+                let gate = LstmGateParams {
+                    input_offset: -input_tensor.quant.zero_point,
+                    hidden_offset: -output_tensor.quant.zero_point,
+                    multiplier: output_tensor.quant.multiplier,
+                    shift: output_tensor.quant.shift,
+                };
+                let result = lstm_step_s8_s16(
+                    &input,
+                    &mut hidden,
+                    &mut cell,
+                    input_weights,
+                    recurrent_weights,
+                    bias,
+                    &gate,
+                    32767,
+                    &per_tensor(&output_tensor),
+                    output_tensor.quant.zero_point,
+                    &activation(&ActivationType::None),
+                );
+                if hidden.len() == output.len() {
+                    output.copy_from_slice(&hidden);
+                }
+                self.lstm_hidden.insert(layer_id, hidden);
+                self.lstm_cell.insert(layer_id, cell);
+                result
             }
         };
 
@@ -607,6 +694,9 @@ fn op_name(op: &OpPayload) -> &'static str {
         OpPayload::AvgPool2D { .. } => "AvgPool2D",
         OpPayload::Softmax => "Softmax",
         OpPayload::ElementwiseAdd { .. } => "ADD",
+        OpPayload::ElementwiseMul { .. } => "MUL",
+        OpPayload::Concat => "Concat",
+        OpPayload::StridedSlice { .. } => "StridedSlice",
         OpPayload::Transpose { .. } => "Transpose",
         OpPayload::Reshape { .. } => "Reshape",
         OpPayload::Pad { .. } => "Pad",
@@ -679,12 +769,7 @@ mod tests {
             DataType::Int8,
             Some(identity_quant()),
         );
-        let padded = builder.add_pad_layer(
-            "pad",
-            input,
-            crate::ir::Padding2D::symmetric(1, 1),
-            0,
-        );
+        let padded = builder.add_pad_layer("pad", input, crate::ir::Padding2D::symmetric(1, 1), 0);
         let mean = builder.add_mean_layer("mean", padded, true, true, false, false);
         builder.mark_output(mean);
         let graph = builder.build();

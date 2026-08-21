@@ -1,5 +1,25 @@
 use crate::ir::*;
-use crate::quant::calculate_elementwise_add_quant;
+use crate::quant::{calculate_elementwise_add_quant, calculate_elementwise_mul_quant};
+
+fn packed_dims(shape: &TensorShape, rank: usize) -> Result<Vec<usize>, &'static str> {
+    Ok(match rank {
+        1 => vec![shape.channels],
+        2 => vec![shape.width, shape.channels],
+        3 => vec![shape.height, shape.width, shape.channels],
+        4 => vec![shape.batches, shape.height, shape.width, shape.channels],
+        _ => return Err("transpose rank must be 1..=4"),
+    })
+}
+
+fn shape_from_packed(dims: &[usize]) -> TensorShape {
+    match dims.len() {
+        1 => TensorShape::new_1d(dims[0]),
+        2 => TensorShape::new_2d(dims[0], dims[1]),
+        3 => TensorShape::new_4d(1, dims[0], dims[1], dims[2]),
+        4 => TensorShape::new_4d(dims[0], dims[1], dims[2], dims[3]),
+        _ => TensorShape::new_1d(dims.iter().product()),
+    }
+}
 
 pub struct ModelBuilder {
     graph: ModelGraph,
@@ -207,6 +227,50 @@ impl ModelBuilder {
             },
         });
 
+        out_id
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_lstm_step_layer(
+        &mut self,
+        name: impl Into<String>,
+        input_id: usize,
+        hidden_dim: usize,
+        input_weights: Vec<i8>,
+        recurrent_weights: Vec<i8>,
+        bias: Vec<i32>,
+        output_quant: Option<QuantParams>,
+    ) -> usize {
+        let input_tensor = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == input_id)
+            .expect("Input tensor not found");
+        let out_id = self.next_tensor_id;
+        self.next_tensor_id += 1;
+        let layer_name = name.into();
+        self.graph.tensors.push(TensorDesc {
+            id: out_id,
+            name: format!("{}_out", layer_name),
+            shape: TensorShape::new_1d(hidden_dim),
+            dtype: input_tensor.dtype,
+            quant: output_quant.unwrap_or_default(),
+        });
+        let layer_id = self.next_layer_id;
+        self.next_layer_id += 1;
+        self.graph.layers.push(LayerNode {
+            id: layer_id,
+            name: layer_name,
+            inputs: vec![input_id],
+            outputs: vec![out_id],
+            op: OpPayload::LstmStep {
+                hidden_dim,
+                input_weights,
+                recurrent_weights,
+                bias,
+            },
+        });
         out_id
     }
 
@@ -612,10 +676,7 @@ impl ModelBuilder {
             name: layer_name,
             inputs: vec![input_id],
             outputs: vec![out_id],
-            op: OpPayload::Pad {
-                padding,
-                pad_value,
-            },
+            op: OpPayload::Pad { padding, pad_value },
         });
         out_id
     }
@@ -732,7 +793,165 @@ impl ModelBuilder {
         Ok(out_id)
     }
 
-    /// Adds one of the transpose forms implemented by the runtime.
+    pub fn add_elementwise_mul_layer(
+        &mut self,
+        name: impl Into<String>,
+        input1_id: usize,
+        input2_id: usize,
+        activation: ActivationType,
+        output_quant: QuantParams,
+    ) -> Result<usize, &'static str> {
+        let input1 = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == input1_id)
+            .ok_or("ElementwiseMul input 1 tensor not found")?;
+        let input2 = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == input2_id)
+            .ok_or("ElementwiseMul input 2 tensor not found")?;
+        if input1.shape != input2.shape {
+            return Err("ElementwiseMul broadcasting is not supported");
+        }
+        let shape = input1.shape;
+        let quant = calculate_elementwise_mul_quant(&input1.quant, &input2.quant, &output_quant);
+        let out_id = self.next_tensor_id;
+        self.next_tensor_id += 1;
+        let layer_name = name.into();
+        self.graph.tensors.push(TensorDesc {
+            id: out_id,
+            name: format!("{}_out", layer_name),
+            shape,
+            dtype: DataType::Int8,
+            quant: output_quant,
+        });
+        let layer_id = self.next_layer_id;
+        self.next_layer_id += 1;
+        self.graph.layers.push(LayerNode {
+            id: layer_id,
+            name: layer_name,
+            inputs: vec![input1_id, input2_id],
+            outputs: vec![out_id],
+            op: OpPayload::ElementwiseMul { quant, activation },
+        });
+        Ok(out_id)
+    }
+
+    pub fn add_concat_layer(
+        &mut self,
+        name: impl Into<String>,
+        input1_id: usize,
+        input2_id: usize,
+    ) -> Result<usize, &'static str> {
+        let input1 = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == input1_id)
+            .ok_or("Concat input 1 tensor not found")?;
+        let input2 = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == input2_id)
+            .ok_or("Concat input 2 tensor not found")?;
+        if input1.shape.batches != input2.shape.batches
+            || input1.shape.height != input2.shape.height
+            || input1.shape.width != input2.shape.width
+        {
+            return Err("Concat requires matching NHW spatial dims");
+        }
+        let shape = TensorShape::new_4d(
+            input1.shape.batches,
+            input1.shape.height,
+            input1.shape.width,
+            input1.shape.channels + input2.shape.channels,
+        );
+        let quant = input1.quant.clone();
+        let dtype = input1.dtype;
+        let out_id = self.next_tensor_id;
+        self.next_tensor_id += 1;
+        let layer_name = name.into();
+        self.graph.tensors.push(TensorDesc {
+            id: out_id,
+            name: format!("{}_out", layer_name),
+            shape,
+            dtype,
+            quant,
+        });
+        let layer_id = self.next_layer_id;
+        self.next_layer_id += 1;
+        self.graph.layers.push(LayerNode {
+            id: layer_id,
+            name: layer_name,
+            inputs: vec![input1_id, input2_id],
+            outputs: vec![out_id],
+            op: OpPayload::Concat,
+        });
+        Ok(out_id)
+    }
+
+    pub fn add_strided_slice_layer(
+        &mut self,
+        name: impl Into<String>,
+        input_id: usize,
+        begin: [i32; 4],
+        end: [i32; 4],
+        stride: [i32; 4],
+    ) -> Result<usize, &'static str> {
+        let input = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == input_id)
+            .ok_or("StridedSlice input tensor not found")?;
+        let dims = [
+            input.shape.batches as i32,
+            input.shape.height as i32,
+            input.shape.width as i32,
+            input.shape.channels as i32,
+        ];
+        let mut out_dims = [1usize; 4];
+        for i in 0..4 {
+            if stride[i] == 0 {
+                return Err("StridedSlice stride cannot be zero");
+            }
+            let start = begin[i].max(0).min(dims[i]);
+            let stop = end[i].max(0).min(dims[i]);
+            let span = (stop - start).unsigned_abs() as usize;
+            let step = stride[i].unsigned_abs() as usize;
+            out_dims[i] = span.div_ceil(step.max(1)).max(1);
+        }
+        let shape = TensorShape::new_4d(out_dims[0], out_dims[1], out_dims[2], out_dims[3]);
+        let quant = input.quant.clone();
+        let dtype = input.dtype;
+        let out_id = self.next_tensor_id;
+        self.next_tensor_id += 1;
+        let layer_name = name.into();
+        self.graph.tensors.push(TensorDesc {
+            id: out_id,
+            name: format!("{}_out", layer_name),
+            shape,
+            dtype,
+            quant,
+        });
+        let layer_id = self.next_layer_id;
+        self.next_layer_id += 1;
+        self.graph.layers.push(LayerNode {
+            id: layer_id,
+            name: layer_name,
+            inputs: vec![input_id],
+            outputs: vec![out_id],
+            op: OpPayload::StridedSlice { begin, end, stride },
+        });
+        Ok(out_id)
+    }
+
+    /// Adds a transpose. Specialized `[1,0]` / `[0,2,1,3]` keep dedicated kernels; other
+    /// rank-1..4 permutations use the general ND permute.
     pub fn add_transpose_layer(
         &mut self,
         name: impl Into<String>,
@@ -766,7 +985,27 @@ impl ModelBuilder {
                     input.shape.channels,
                 ),
             ),
-            _ => return Err("unsupported transpose rank or permutation"),
+            perm => {
+                let dims = packed_dims(&input.shape, perm.len())?;
+                if perm.len() != dims.len() {
+                    return Err("transpose permutation rank mismatch");
+                }
+                let mut out = dims.clone();
+                for (i, &p) in perm.iter().enumerate() {
+                    if p >= dims.len() {
+                        return Err("transpose permutation axis out of range");
+                    }
+                    out[i] = dims[p];
+                }
+                let shape = shape_from_packed(&out);
+                (
+                    TransposeKind::Nd {
+                        dims,
+                        perm: perm.to_vec(),
+                    },
+                    shape,
+                )
+            }
         };
 
         let out_id = self.next_tensor_id;
@@ -1245,6 +1484,6 @@ mod tests {
                 .shape,
             TensorShape::new_2d(3, 2)
         );
-        assert!(builder.add_transpose_layer("bad", matrix, &[0, 1]).is_err());
+        assert!(builder.add_transpose_layer("id", matrix, &[0, 1]).is_ok());
     }
 }

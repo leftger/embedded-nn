@@ -1,11 +1,11 @@
 use embedded_nn_compiler::builder::ModelBuilder;
 use embedded_nn_compiler::ir::{ActivationType, DataType, ModelGraph, QuantParams, TensorShape};
 use embedded_nn_compiler::quant::{
-    calculate_asymmetric_quant_s8, calculate_output_requant_multiplier, calculate_symmetric_quant_s8,
-    quantize_weights_s8,
+    calculate_asymmetric_quant_s8, calculate_output_requant_multiplier,
+    calculate_symmetric_quant_s8, quantize_weights_s8,
 };
 
-const INPUT_SCALE: f32 = 1.0 / 127.0;
+pub(crate) const INPUT_SCALE: f32 = 1.0 / 127.0;
 
 fn relu(x: f32) -> f32 {
     x.max(0.0)

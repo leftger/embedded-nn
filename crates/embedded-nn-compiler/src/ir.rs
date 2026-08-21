@@ -159,12 +159,24 @@ pub struct ElementwiseAddQuant {
     pub output_shift: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Fixed-point parameters for quantized elementwise multiplication.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ElementwiseMulQuant {
+    pub input1_offset: i32,
+    pub input2_offset: i32,
+    pub output_offset: i32,
+    pub output_multiplier: i32,
+    pub output_shift: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransposeKind {
     /// Rank-2 `[rows, cols]` with permutation `[1, 0]`.
     Matrix2D { rows: usize, cols: usize },
     /// Rank-4 NHWC with permutation `[0, 2, 1, 3]`.
     Spatial4D,
+    /// Arbitrary rank-1..4 permutation of packed dimensions.
+    Nd { dims: Vec<usize>, perm: Vec<usize> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -223,6 +235,16 @@ pub enum OpPayload {
     ElementwiseAdd {
         quant: ElementwiseAddQuant,
         activation: ActivationType,
+    },
+    ElementwiseMul {
+        quant: ElementwiseMulQuant,
+        activation: ActivationType,
+    },
+    Concat,
+    StridedSlice {
+        begin: [i32; 4],
+        end: [i32; 4],
+        stride: [i32; 4],
     },
     Transpose {
         kind: TransposeKind,

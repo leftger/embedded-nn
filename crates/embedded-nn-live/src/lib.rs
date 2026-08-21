@@ -9,8 +9,8 @@ pub mod protocol;
 pub use dataset::{DatasetParseError, DatasetRecord, parse_jsonl};
 pub use protocol::{
     DecodeError, Decoder, EncodeError, FRAME_OVERHEAD, HEADER_LEN, HELLO_PAYLOAD_LEN,
-    INFERENCE_RESULT_HEADER, Msg, NackCode, PROTO_VERSION, READY_PAYLOAD_LEN,
-    RUN_INFERENCE_HEADER, SENSOR_HEADER, TRAILER_LEN, crc16, decode_f32_le, encode_f32_le,
+    INFERENCE_RESULT_HEADER, Msg, NackCode, PROTO_VERSION, READY_PAYLOAD_LEN, RUN_INFERENCE_HEADER,
+    SENSOR_HEADER, TRAILER_LEN, crc16, decode_f32_le, encode_f32_le,
 };
 
 #[cfg(feature = "std")]

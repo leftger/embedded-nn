@@ -88,7 +88,11 @@ pub fn reduce_mean_s8(
                             }
                         }
                     }
-                    let mean = if count == 0 { 0 } else { (sum + count / 2) / count };
+                    let mean = if count == 0 {
+                        0
+                    } else {
+                        (sum + count / 2) / count
+                    };
                     let out_idx = ((b * out_h + oh) * out_w + ow) * out_c + oc;
                     output[out_idx] = mean.clamp(-128, 127) as i8;
                 }

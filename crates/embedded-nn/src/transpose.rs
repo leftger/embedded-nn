@@ -33,6 +33,54 @@ pub fn transpose_spatial_s8(input_dims: &Dims, input: &[i8], output: &mut [i8]) 
     Ok(())
 }
 
+/// Permutes an N-dimensional packed tensor (`N <= 4`) according to `perm`.
+pub fn transpose_nd_s8(
+    dims: &[usize],
+    perm: &[usize],
+    input: &[i8],
+    output: &mut [i8],
+) -> Result<()> {
+    if dims.len() != perm.len() || dims.is_empty() || dims.len() > 4 {
+        return Err(crate::types::Error::ArgumentError);
+    }
+    let rank = dims.len();
+    let mut seen = [false; 4];
+    for &p in perm {
+        if p >= rank || seen[p] {
+            return Err(crate::types::Error::ArgumentError);
+        }
+        seen[p] = true;
+    }
+    let mut out_dims = [1usize; 4];
+    let mut in_dims = [1usize; 4];
+    for i in 0..rank {
+        in_dims[i] = dims[i];
+        out_dims[i] = dims[perm[i]];
+    }
+    let total: usize = in_dims.iter().take(rank).product();
+    if input.len() < total || output.len() < total {
+        return Err(crate::types::Error::ArgumentError);
+    }
+    for index in 0..total {
+        let mut coord = [0usize; 4];
+        let mut remainder = index;
+        for axis in (0..rank).rev() {
+            coord[axis] = remainder % in_dims[axis];
+            remainder /= in_dims[axis];
+        }
+        let mut out_coord = [0usize; 4];
+        for axis in 0..rank {
+            out_coord[axis] = coord[perm[axis]];
+        }
+        let mut out_index = 0usize;
+        for axis in 0..rank {
+            out_index = out_index * out_dims[axis] + out_coord[axis];
+        }
+        output[out_index] = input[index];
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,9 +1,8 @@
 # STM32WBA65RI inference stub
 
-This standalone, workspace-excluded firmware initializes `embassy-stm32` for the
-STM32WBA65RI, runs the generated model with caller-owned storage, measures `predict` with the
-Cortex-M33 DWT cycle counter, and writes the result over RTT with `defmt`. It intentionally does
-not initialize a BLE stack.
+This firmware DSP-extracts the first Mel frame (`feature_dsp`), classifies it with a 16→2
+integer MLP (`models/gesture_mlp.json`), then still runs the generated sine identity model for
+the original hello-world check. DWT cycles and SRAM arena size are printed over RTT.
 
 ```console
 rustup target add thumbv8m.main-none-eabihf

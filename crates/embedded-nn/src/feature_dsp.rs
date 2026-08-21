@@ -104,7 +104,11 @@ pub fn extract_mel_sequence(
             biquad_highpass_coeffs(config.high_pass_cutoff_hz, config.sample_rate_hz, 0.7071);
         let mut hp_state = [0.0f32; 4];
         let mut instance = BiquadCascadeInstanceF32::init(1, &coeffs, &mut hp_state);
-        biquad_cascade_df1_f32(&mut instance, &captured[..capture], &mut filtered[..capture]);
+        biquad_cascade_df1_f32(
+            &mut instance,
+            &captured[..capture],
+            &mut filtered[..capture],
+        );
     }
 
     let n = config.window_size;
@@ -162,7 +166,11 @@ pub fn extract_mel_sequence(
 /// Symmetric s8 quantization using `config.input_scale`.
 pub fn quantize_mel_s8(values: &[f32], scale: f32, out: &mut [i8]) {
     let n = values.len().min(out.len());
-    let scale = if scale.abs() < 1e-12 { 1.0 / 127.0 } else { scale };
+    let scale = if scale.abs() < 1e-12 {
+        1.0 / 127.0
+    } else {
+        scale
+    };
     for i in 0..n {
         let q = libm::roundf(values[i] / scale);
         out[i] = q.clamp(-128.0, 127.0) as i8;

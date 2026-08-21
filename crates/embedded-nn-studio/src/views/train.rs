@@ -30,7 +30,7 @@ impl TrainView {
 
         ui.add_space(4.0);
         ui.label(
-            "Demo SGD is educational. Burn PTQ/QAT (Dense MLP) trains float weights with Adam, then uses compiler quant.rs. Import a quantized TFLite graph for production models that are already integer.",
+            "Demo SGD is educational. Burn PTQ/QAT trains Dense MLP, TinyConv1D, and SVDF with Adam and activation fake-quant, then compiler quant.rs. Import a quantized TFLite graph for production models that are already integer.",
         );
         ui.label(format!(
             "Active model source: {}",

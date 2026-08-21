@@ -280,7 +280,10 @@ fn open_agent(
             .find(|agent| agent.stable_id() == id || agent.display_name() == id)
             .ok_or_else(|| format!("no agent matching {id}"))?
     } else {
-        agents.into_iter().next().ok_or("no embedded-nn agent connected")?
+        agents
+            .into_iter()
+            .next()
+            .ok_or("no embedded-nn agent connected")?
     };
     println!("Opening {}", chosen.stable_id());
     Ok(chosen.open()?)

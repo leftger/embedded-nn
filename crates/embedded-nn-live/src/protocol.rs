@@ -95,7 +95,10 @@ pub enum Msg<'a> {
         channel_count: u8,
         values: &'a [u8],
     },
-    Nack { seq: u32, code: u16 },
+    Nack {
+        seq: u32,
+        code: u16,
+    },
     Pong,
 }
 
