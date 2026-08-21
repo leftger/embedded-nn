@@ -1,5 +1,7 @@
 use crate::state::{DatasetSample, StudioState};
 use eframe::egui;
+use embedded_nn_live::decode_f32_le;
+use embedded_nn_live::host::{DeviceLink, OwnedMsg, UsbBridge};
 use std::path::{Path, PathBuf};
 
 fn file_name(path: &Path) -> String {
@@ -22,12 +24,14 @@ pub struct IngestView {
     pub live_sensor_history: Vec<f32>,
     pub live_time_counter: f32,
     pub import_status: String,
+    pub available_agents: Vec<String>,
+    pub link_status: String,
 }
 
 impl IngestView {
     pub fn new() -> Self {
         Self {
-            selected_port: "USB-CDC (ACM0)".into(),
+            selected_port: "Simulated IMU Source".into(),
             sample_rate_hz: 100,
             current_label: "wave_left".into(),
             new_class_name: String::new(),
@@ -35,6 +39,8 @@ impl IngestView {
             live_sensor_history: (0..100).map(|i| ((i as f32) * 0.1).sin() * 0.7).collect(),
             live_time_counter: 0.0,
             import_status: String::new(),
+            available_agents: Vec::new(),
+            link_status: "Disconnected".into(),
         }
     }
 
@@ -81,14 +87,19 @@ impl IngestView {
         };
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, state: &mut StudioState) {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &mut StudioState,
+        device_link: &mut Option<DeviceLink>,
+    ) {
         ui.horizontal(|ui| {
             ui.heading("📊 1. Data Ingestion, Telemetry & Dataset Tagging");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("🔄 Reset to Demo Dataset").clicked() {
                     state.load_demo_dataset();
                     state.recompute_all_frames();
-                    state.rebuild_model_graph_and_codegen();
+                    state.use_demo_trainer();
                 }
                 ui.label(format!("Total Dataset Samples: {}", state.samples.len()));
             });
@@ -109,20 +120,69 @@ impl IngestView {
                     .show_ui(ui, |ui| {
                         ui.selectable_value(
                             &mut self.selected_port,
-                            "USB-CDC (ACM0)".into(),
-                            "🔌 USB-CDC (ACM0)",
-                        );
-                        ui.selectable_value(
-                            &mut self.selected_port,
-                            "ST-Link V3 Telemetry".into(),
-                            "⚡ ST-Link V3 Telemetry",
-                        );
-                        ui.selectable_value(
-                            &mut self.selected_port,
                             "Simulated IMU Source".into(),
-                            "💻 Simulated IMU Source",
+                            "Simulated IMU Source",
                         );
+                        for agent in &self.available_agents {
+                            ui.selectable_value(
+                                &mut self.selected_port,
+                                agent.clone(),
+                                format!("USB-HS {agent}"),
+                            );
+                        }
                     });
+                if ui.button("Refresh USB").clicked() {
+                    self.available_agents = UsbBridge::list_devices();
+                    self.link_status = format!("{} agent(s)", self.available_agents.len());
+                }
+                if ui.button("Connect").clicked() {
+                    *device_link = None;
+                    if self.selected_port == "Simulated IMU Source" {
+                        self.link_status = "Using simulated IMU (no USB).".into();
+                    } else {
+                        match DeviceLink::connect(&self.selected_port) {
+                            Ok(link) => {
+                                self.link_status = format!("Connecting {}", link.device_id());
+                                *device_link = Some(link);
+                            }
+                            Err(error) => self.link_status = error,
+                        }
+                    }
+                }
+                if ui.button("Disconnect").clicked() {
+                    *device_link = None;
+                    self.link_status = "Disconnected".into();
+                }
+                if let Some(link) = device_link.as_ref() {
+                    if link.is_handshaked() {
+                        self.link_status = format!("Ready {}", link.device_id());
+                    }
+                    if ui.button("Ping").clicked() {
+                        link.ping();
+                    }
+                    if let Some(OwnedMsg::SensorFrame {
+                        timestamp_ms,
+                        channel_count,
+                        values,
+                    }) = link.take_sensor()
+                    {
+                        let mut samples = vec![0.0f32; values.len() / 4];
+                        if let Ok(n) = decode_f32_le(&values, &mut samples) {
+                            self.live_sensor_history.extend(&samples[..n]);
+                            if self.live_sensor_history.len() > 400 {
+                                let extra = self.live_sensor_history.len() - 400;
+                                self.live_sensor_history.drain(..extra);
+                            }
+                            self.link_status = format!(
+                                "t={timestamp_ms} ms ch={channel_count} samples={n}"
+                            );
+                        }
+                    }
+                    if let Some(error) = link.take_error() {
+                        self.link_status = error;
+                    }
+                }
+                ui.label(&self.link_status);
 
                 ui.separator();
 
@@ -457,7 +517,10 @@ mod tests {
             ..Default::default()
         };
         let output = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| view.show(ui, &mut state));
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut device_link = None;
+                view.show(ui, &mut state, &mut device_link)
+            });
         });
 
         let mut painted = String::new();

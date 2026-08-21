@@ -12,11 +12,12 @@ name = "embedded-nn-studio"
 path = "src/main.rs"
 
 [dependencies]
-embedded-nn = { workspace = true, features = ["alloc", "float", "libm"] }
-embedded-dsp = { workspace = true }
+embedded-nn = { workspace = true, features = ["alloc", "float", "libm", "dsp"] }
 embedded-nn-compiler = { workspace = true }
 embedded-nn-codegen = { workspace = true }
 embedded-nn-live = { workspace = true }
+embedded-nn-tflite = { workspace = true }
+embedded-nn-train = { workspace = true }
 eframe = { workspace = true }
 egui_extras = { workspace = true }
 rfd = { workspace = true }

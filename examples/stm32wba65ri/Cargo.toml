@@ -4,15 +4,32 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[[bin]]
+name = "embedded-nn-stm32wba65ri"
+path = "src/main.rs"
+
+[[bin]]
+name = "hil_agent"
+path = "src/bin/hil_agent.rs"
+required-features = ["hil-usb"]
+
+[features]
+default = []
+hil-usb = ["dep:embassy-usb", "dep:embassy-executor", "dep:static_cell", "dep:embedded-nn-live"]
+
 [dependencies]
-cortex-m = { version = "0.7.7", features = ["inline-asm"] }
+cortex-m = { version = "0.7.7", features = ["inline-asm", "critical-section-single-core"] }
 cortex-m-rt = "0.7.5"
-defmt = "1.0.1"
-defmt-rtt = "1.3.0"
-embassy-stm32 = { version = "0.6.0", features = ["defmt", "memory-x", "stm32wba65ri"] }
-embedded-nn = { path = "../../crates/embedded-nn", default-features = false, features = ["libm"] }
+defmt = "0.3.10"
+defmt-rtt = "0.4.1"
+embassy-stm32 = { git = "https://github.com/embassy-rs/embassy", branch = "main", features = ["defmt", "memory-x", "stm32wba65ri", "time-driver-any", "exti"] }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy", branch = "main", features = ["platform-cortex-m", "executor-thread", "defmt"], optional = true }
+embassy-usb = { git = "https://github.com/embassy-rs/embassy", branch = "main", features = ["defmt"], optional = true }
+embedded-nn = { path = "../../crates/embedded-nn", default-features = false, features = ["libm", "dsp"] }
+embedded-nn-live = { path = "../../crates/embedded-nn-live", default-features = false, optional = true }
 embedded-nn-macros = { path = "../../crates/embedded-nn-macros" }
-panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+panic-probe = { version = "0.3.2", features = ["print-defmt"] }
+static_cell = { version = "2", optional = true }
 
 [profile.dev]
 panic = "abort"

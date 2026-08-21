@@ -46,6 +46,58 @@ pub fn pad_s8(
     Ok(())
 }
 
+/// Averages int8 NHWC values over the selected spatial/channel axes.
+pub fn reduce_mean_s8(
+    batches: usize,
+    height: usize,
+    width: usize,
+    channels: usize,
+    reduce_height: bool,
+    reduce_width: bool,
+    reduce_channels: bool,
+    input: &[i8],
+    output: &mut [i8],
+) -> Result<()> {
+    let out_h = if reduce_height { 1 } else { height };
+    let out_w = if reduce_width { 1 } else { width };
+    let out_c = if reduce_channels { 1 } else { channels };
+    let expected = batches * out_h * out_w * out_c;
+    if output.len() < expected {
+        return Err(crate::types::Error::ArgumentError);
+    }
+
+    for b in 0..batches {
+        for oh in 0..out_h {
+            for ow in 0..out_w {
+                for oc in 0..out_c {
+                    let h_range = if reduce_height { 0..height } else { oh..oh + 1 };
+                    let w_range = if reduce_width { 0..width } else { ow..ow + 1 };
+                    let c_range = if reduce_channels {
+                        0..channels
+                    } else {
+                        oc..oc + 1
+                    };
+                    let mut sum = 0i32;
+                    let mut count = 0i32;
+                    for h in h_range.clone() {
+                        for w in w_range.clone() {
+                            for c in c_range.clone() {
+                                let idx = ((b * height + h) * width + w) * channels + c;
+                                sum += i32::from(input[idx]);
+                                count += 1;
+                            }
+                        }
+                    }
+                    let mean = if count == 0 { 0 } else { (sum + count / 2) / count };
+                    let out_idx = ((b * out_h + oh) * out_w + ow) * out_c + oc;
+                    output[out_idx] = mean.clamp(-128, 127) as i8;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

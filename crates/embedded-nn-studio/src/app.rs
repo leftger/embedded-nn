@@ -1,4 +1,4 @@
-use crate::state::StudioState;
+use crate::state::{ModelImportStatus, StudioState};
 use crate::theme::configure_theme;
 use crate::views::arena::ArenaView;
 use crate::views::codegen::CodegenView;
@@ -6,6 +6,7 @@ use crate::views::dsp::DspView;
 use crate::views::ingest::IngestView;
 use crate::views::train::TrainView;
 use eframe::egui;
+use embedded_nn_live::host::DeviceLink;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +26,7 @@ pub struct EmbeddedNnStudioApp {
     pub train_view: TrainView,
     pub arena_view: ArenaView,
     pub codegen_view: CodegenView,
+    pub device_link: Option<DeviceLink>,
 }
 
 impl Default for EmbeddedNnStudioApp {
@@ -37,6 +39,7 @@ impl Default for EmbeddedNnStudioApp {
             train_view: TrainView::new(),
             arena_view: ArenaView::new(),
             codegen_view: CodegenView::new(),
+            device_link: None,
         }
     }
 }
@@ -54,6 +57,35 @@ impl eframe::App for EmbeddedNnStudioApp {
             });
 
             ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(format!(
+                    "Model source: {}",
+                    self.state.model_source.display_name()
+                ));
+                if ui.button("Open .tflite").clicked()
+                    && let Some(path) = rfd::FileDialog::new()
+                        .add_filter("TensorFlow Lite", &["tflite"])
+                        .pick_file()
+                {
+                    let _ = self.state.import_tflite_path(path);
+                }
+                if ui.button("Open ModelGraph .json").clicked()
+                    && let Some(path) = rfd::FileDialog::new()
+                        .add_filter("embedded-nn ModelGraph JSON", &["json"])
+                        .pick_file()
+                {
+                    let _ = self.state.import_json_path(path);
+                }
+                match &self.state.model_import_status {
+                    ModelImportStatus::Idle => {}
+                    ModelImportStatus::Imported(message) => {
+                        ui.colored_label(egui::Color32::from_rgb(100, 220, 140), message);
+                    }
+                    ModelImportStatus::Error(message) => {
+                        ui.colored_label(egui::Color32::from_rgb(240, 90, 90), message);
+                    }
+                }
+            });
 
             // Step-by-Step Pipeline Navigation Bar with Live Status Badges
             ui.horizontal(|ui| {
@@ -86,17 +118,24 @@ impl eframe::App for EmbeddedNnStudioApp {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| match self.current_tab {
-            StudioTab::Ingest => self.ingest_view.show(ui, &mut self.state),
+            StudioTab::Ingest => {
+                self.ingest_view
+                    .show(ui, &mut self.state, &mut self.device_link)
+            }
             StudioTab::Dsp => self.dsp_view.show(ui, &mut self.state),
             StudioTab::Train => self.train_view.show(ui, &mut self.state),
             StudioTab::Arena => self.arena_view.show(ui, &mut self.state),
-            StudioTab::Codegen => self.codegen_view.show(ui, &mut self.state),
+            StudioTab::Codegen => self
+                .codegen_view
+                .show(ui, &mut self.state, self.device_link.as_ref()),
         });
 
         // Request continuous repaint for smooth 60 FPS live oscilloscope stream and training progress
         if self.current_tab == StudioTab::Ingest
+            || self.current_tab == StudioTab::Codegen
             || self.state.is_training
             || self.ingest_view.is_recording
+            || self.device_link.as_ref().is_some_and(|link| link.is_alive())
         {
             ctx.request_repaint_after(Duration::from_millis(16));
         }

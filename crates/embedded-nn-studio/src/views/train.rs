@@ -11,7 +11,7 @@ impl TrainView {
 
     pub fn show(&mut self, ui: &mut egui::Ui, state: &mut StudioState) {
         ui.horizontal(|ui| {
-            ui.heading("🧠 3. Model Architecture, Burn QAT Training & Quantization");
+            ui.heading("🧠 3. Trainer");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let latest_acc = state.val_acc_history.last().copied().unwrap_or(0.0);
                 ui.colored_label(
@@ -30,9 +30,24 @@ impl TrainView {
 
         ui.add_space(4.0);
         ui.label(
-            "Configure lightweight TinyML model topologies, simulate Quantization-Aware Training (QAT) with sub-byte s4/s8 fixed-point math, and inspect convergence metrics & confusion matrices.",
+            "Demo SGD is educational. Burn PTQ/QAT (Dense MLP) trains float weights with Adam, then uses compiler quant.rs. Import a quantized TFLite graph for production models that are already integer.",
         );
+        ui.label(format!(
+            "Active model source: {}",
+            state.model_source.display_name()
+        ));
         ui.add_space(8.0);
+
+        if state.model_source.is_imported() {
+            ui.colored_label(
+                egui::Color32::from_rgb(100, 200, 240),
+                "Training controls are disabled for imported models; the imported graph remains the source of truth.",
+            );
+            if ui.button("Switch to demo trainer").clicked() {
+                state.use_demo_trainer();
+            }
+            return;
+        }
 
         let mut config_changed = false;
 
@@ -45,7 +60,7 @@ impl TrainView {
                     .selected_text(match state.model_config.arch {
                         ModelArchitecture::DenseMLP => "Dense MLP (Tabular/Sensor)",
                         ModelArchitecture::TinyConv1D => "TinyConv1D (Temporal Patterns)",
-                        ModelArchitecture::RecurrentSVDF => "Recurrent SVDF / LSTM",
+                        ModelArchitecture::RecurrentSVDF => "Recurrent SVDF",
                     })
                     .show_ui(ui, |ui| {
                         ui.selectable_value(
@@ -61,7 +76,7 @@ impl TrainView {
                         ui.selectable_value(
                             &mut state.model_config.arch,
                             ModelArchitecture::RecurrentSVDF,
-                            "Recurrent SVDF / LSTM",
+                            "Recurrent SVDF",
                         );
                     });
                 if state.model_config.arch != prev_arch {
@@ -103,7 +118,6 @@ impl TrainView {
                     .selected_text(match state.model_config.quant_mode {
                         QuantizationMode::Int4SubByte => "s4 (4-bit sub-byte packed, 50% Flash)",
                         QuantizationMode::Int8FixedPoint => "s8 (8-bit fixed-point CMSIS-NN)",
-                        QuantizationMode::Int16HighPrecision => "s16 (16-bit high-precision)",
                     })
                     .show_ui(ui, |ui| {
                         ui.selectable_value(
@@ -115,11 +129,6 @@ impl TrainView {
                             &mut state.model_config.quant_mode,
                             QuantizationMode::Int8FixedPoint,
                             "s8 (8-bit fixed-point CMSIS-NN)",
-                        );
-                        ui.selectable_value(
-                            &mut state.model_config.quant_mode,
-                            QuantizationMode::Int16HighPrecision,
-                            "s16 (16-bit high-precision)",
                         );
                     });
                 if state.model_config.quant_mode != prev_q {
@@ -156,6 +165,13 @@ impl TrainView {
                 if ui.button("⏭ Step 10 Epochs").clicked() {
                     state.run_simulated_training(10);
                     state.rebuild_model_graph_and_codegen();
+                }
+
+                if ui.button("🔥 Burn PTQ").clicked() {
+                    state.run_burn_training(false);
+                }
+                if ui.button("🔥 Burn QAT").clicked() {
+                    state.run_burn_training(true);
                 }
 
                 if ui.button("🔄 Reset Weights").clicked() {

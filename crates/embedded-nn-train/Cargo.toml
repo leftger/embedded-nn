@@ -1,0 +1,13 @@
+[package]
+name = "embedded-nn-train"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Host-side Burn trainer: float PTQ and fake-quant QAT into embedded-nn ModelGraph"
+
+[dependencies]
+embedded-nn-compiler = { workspace = true }
+burn = { version = "0.18.0", default-features = false, features = ["std", "train", "ndarray"] }
+thiserror = { workspace = true }

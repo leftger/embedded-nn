@@ -233,6 +233,14 @@ impl RustCodeGenerator {
             .layers
             .iter()
             .any(|l| matches!(l.op, OpPayload::AvgPool2D { .. }));
+        let has_pad = graph
+            .layers
+            .iter()
+            .any(|l| matches!(l.op, OpPayload::Pad { .. }));
+        let has_mean = graph
+            .layers
+            .iter()
+            .any(|l| matches!(l.op, OpPayload::Mean { .. }));
         let has_add = graph
             .layers
             .iter()
@@ -255,7 +263,8 @@ impl RustCodeGenerator {
         });
         let needs_per_channel_quant_params =
             has_per_channel_fc || has_conv2d_per_channel || has_depthwise;
-        let needs_tile = has_conv1d || has_conv2d || has_depthwise || has_maxpool || has_avgpool;
+        let needs_tile =
+            has_conv1d || has_conv2d || has_depthwise || has_maxpool || has_avgpool || has_pad;
 
         // Plain comments remain valid both at a generated file's root and when the generated
         // tokens replace an item through `#[embedded_nn_model(...)]`.
@@ -299,6 +308,12 @@ impl RustCodeGenerator {
         }
         if has_avgpool {
             out.push_str("    avg_pool_s8,\n");
+        }
+        if has_pad {
+            out.push_str("    pad_s8,\n");
+        }
+        if has_mean {
+            out.push_str("    reduce_mean_s8,\n");
         }
         if has_add {
             out.push_str("    elementwise_add_s8, ElementwiseAddParams,\n");
@@ -450,7 +465,9 @@ impl RustCodeGenerator {
                 | OpPayload::Softmax
                 | OpPayload::ElementwiseAdd { .. }
                 | OpPayload::Transpose { .. }
-                | OpPayload::Reshape { .. } => {}
+                | OpPayload::Reshape { .. }
+                | OpPayload::Pad { .. }
+                | OpPayload::Mean { .. } => {}
                 OpPayload::LstmStep { .. } => {
                     out.push_str(
                         "compile_error!(\"LstmStep code generation is not supported\");\n",
@@ -877,6 +894,29 @@ impl RustCodeGenerator {
                     // Reshape only changes shape metadata; the underlying row-major data is
                     // identical, so this is a straight copy (in_len == out_len by definition).
                     out.push_str("        out_buf.copy_from_slice(in_buf);\n\n");
+                }
+                OpPayload::Pad {
+                    padding,
+                    pad_value,
+                } => {
+                    out.push_str(&format!(
+                        "        pad_s8(\n            &Dims::new(1, {}, {}, {}),\n            in_buf,\n            &Tile::new({}, {}),\n            &Tile::new({}, {}),\n            {},\n            &Dims::new(1, {}, {}, {}),\n            out_buf,\n        ).map_err(|_| \"Pad s8 execution failed\")?;\n\n",
+                        in_t.shape.height, in_t.shape.width, in_t.shape.channels,
+                        padding.left, padding.top, padding.right, padding.bottom, pad_value,
+                        out_t.shape.height, out_t.shape.width, out_t.shape.channels
+                    ));
+                }
+                OpPayload::Mean {
+                    reduce_height,
+                    reduce_width,
+                    reduce_channels,
+                    ..
+                } => {
+                    out.push_str(&format!(
+                        "        reduce_mean_s8(\n            {}, {}, {}, {},\n            {}, {}, {},\n            in_buf,\n            out_buf,\n        ).map_err(|_| \"Mean s8 execution failed\")?;\n\n",
+                        in_t.shape.batches, in_t.shape.height, in_t.shape.width, in_t.shape.channels,
+                        reduce_height, reduce_width, reduce_channels
+                    ));
                 }
                 OpPayload::ElementwiseAdd { quant, activation } => {
                     out.push_str(&format!(

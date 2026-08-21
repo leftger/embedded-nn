@@ -230,6 +230,16 @@ pub enum OpPayload {
     Reshape {
         new_shape: TensorShape,
     },
+    Pad {
+        padding: Padding2D,
+        pad_value: i8,
+    },
+    Mean {
+        reduce_height: bool,
+        reduce_width: bool,
+        reduce_channels: bool,
+        keep_dims: bool,
+    },
     LstmStep {
         hidden_dim: usize,
         input_weights: Vec<i8>,

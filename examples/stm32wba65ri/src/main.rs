@@ -6,12 +6,8 @@ use cortex_m_rt::entry;
 use defmt_rtt as _;
 use panic_probe as _;
 
-mod model {
-    use embedded_nn_macros::embedded_nn_model;
-
-    #[embedded_nn_model("../../crates/embedded-nn-tflite/fixtures/constructed/sine_fc_int8.tflite")]
-    pub struct SineFc;
-}
+mod model;
+mod on_device_dsp;
 
 #[entry]
 fn main() -> ! {
@@ -19,6 +15,10 @@ fn main() -> ! {
     let mut core = cortex_m::Peripherals::take().unwrap();
     core.DCB.enable_trace();
     core.DWT.enable_cycle_counter();
+
+    let mut dsp_features = [0i8; 16];
+    let n = on_device_dsp::first_frame_s8(&[0.25; 64], &mut dsp_features);
+    defmt::info!("dsp first frame ({} bins): {:?}", n, dsp_features);
 
     let input = [64i8; model::SineFc::INPUT_DIM];
     let mut arena = [0u8; model::SineFc::ARENA_SIZE];

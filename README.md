@@ -16,12 +16,14 @@ A pure Rust, `#![no_std]` neural network inference runtime, compiler, and TinyML
 | Crate | Description |
 | :--- | :--- |
 | [`crates/embedded-nn`](crates/embedded-nn) | Core `#![no_std]` runtime & quantized neural kernels (`s8`, `s16`, `s4` sub-byte). |
-| [`crates/embedded-nn-compiler`](crates/embedded-nn-compiler) | Model graph IR, Ahead-of-Time static SRAM arena scheduler, and PTQ/QAT quantizer. |
+| [`crates/embedded-nn-compiler`](crates/embedded-nn-compiler) | Model graph IR, static SRAM arena scheduler, quantization helpers, and std host integer interpreter. |
 | [`crates/embedded-nn-codegen`](crates/embedded-nn-codegen) | Zero-allocation `#![no_std]` Rust code & static const weight array emitter. |
 | [`crates/embedded-nn-macros`](crates/embedded-nn-macros) | Procedural macro `#[embedded_nn_model("...")]` for compile-time model embedding. |
-| [`crates/embedded-nn-live`](crates/embedded-nn-live) | USB (`nusb`) streaming telemetry & Hardware-in-the-Loop (HIL) verification protocol. |
-| [`crates/embedded-nn-cli`](crates/embedded-nn-cli) | `enn` CLI tool for static memory profiling, codegen, and device discovery. |
-| [`crates/embedded-nn-studio`](crates/embedded-nn-studio) | Interactive `eframe`/`egui` desktop TinyML Studio (Ingest -> DSP -> Train -> Arena -> Deploy). |
+| [`crates/embedded-nn-live`](crates/embedded-nn-live) | Binary USB-HS HIL protocol (`0xE6 0x4E` frames, CRC-16, vendor bulk `1209:e612`) plus JSONL dataset import. |
+| [`crates/embedded-nn-cli`](crates/embedded-nn-cli) | `enn` CLI for profiling, codegen, TFLite import, dataset validate, and `enn hil ping/infer`. |
+| [`crates/embedded-nn-studio`](crates/embedded-nn-studio) | Interactive desktop Studio: Burn PTQ/QAT for Dense MLP, demo SGD, ModelGraph/TFLite import, arena, integer preview, Rust export. |
+| [`crates/embedded-nn-tflite`](crates/embedded-nn-tflite) | TFLite importer (FC, Conv2D/Conv1D, DW, pool, softmax, reshape, ADD, transpose, Pad, Mean, SVDF). |
+| [`crates/embedded-nn-train`](crates/embedded-nn-train) | Host-only Burn Adam trainer: float PTQ and fake-quant QAT into an integer `ModelGraph`. |
 
 ---
 
@@ -66,6 +68,16 @@ cargo run -p embedded-nn-cli -- profile --model models/gesture_classifier.json
 ### 3. Launching the TinyML Studio
 ```bash
 cargo run -p embedded-nn-studio
+```
+
+### 4. Hardware-in-the-loop
+
+See **[Live HIL protocol](docs/LIVE_PROTOCOL.md)**. Flash `examples/stm32wba65ri` `hil_agent`, then:
+
+```bash
+enn devices
+enn hil ping
+enn hil infer --input 64
 ```
 
 ---

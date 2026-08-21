@@ -45,6 +45,8 @@ pub mod float_ops;
 pub mod fully_connected;
 #[cfg(feature = "libm")]
 pub mod ml;
+#[cfg(feature = "dsp")]
+pub mod feature_dsp;
 pub mod pad;
 pub mod pooling;
 pub mod recurrent;
@@ -83,6 +85,7 @@ pub use fully_connected::{
     batch_matmul_s8, batch_matmul_s16, fully_connected_per_channel_s8, fully_connected_s8,
 };
 pub use pooling::{avg_pool_s8, max_pool_s8};
+pub use pad::{pad_s8, reduce_mean_s8};
 pub use recurrent::{LstmGateParams, lstm_step_s8_s16, lstm_step_s16, svdf_s8, svdf_state_s16_s8};
 pub use simd::{vec_dot_s8, vec_dot_s16};
 pub use softmax::softmax_s8;

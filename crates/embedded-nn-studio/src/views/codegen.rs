@@ -1,6 +1,8 @@
 use crate::state::StudioState;
 use crate::syntax::highlight_rust;
 use eframe::egui;
+use embedded_nn_live::host::{DeviceLink, OwnedMsg};
+use std::path::Path;
 
 /// Inner/outer margins of an `egui` group frame, which shrink the space usable by its contents.
 const GROUP_VERTICAL_PADDING: f32 = 16.0;
@@ -19,16 +21,53 @@ impl CodegenView {
         }
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, state: &mut StudioState) {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &mut StudioState,
+        device_link: Option<&DeviceLink>,
+    ) {
+        if let Some(link) = device_link {
+            match link.take_result() {
+                Some(OwnedMsg::InferenceResult {
+                    execution_cycles,
+                    logits,
+                    ..
+                }) => {
+                    state.apply_device_inference(execution_cycles, &logits);
+                }
+                Some(OwnedMsg::Pong) | None => {}
+                Some(other) => {
+                    state.golden_status = Some(format!("Device message: {other:?}"));
+                }
+            }
+            if let Some(error) = link.take_error() {
+                state.golden_status = Some(format!("HIL: {error}"));
+            }
+        }
+
         ui.horizontal(|ui| {
             ui.heading("⚡ 5. Zero-Allocation #![no_std] Rust Code Generator & HIL Playground");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("💾 Export to src/model.rs").clicked() {
-                    let _ = std::fs::write("model.rs", &state.generated_rust_code);
-                    self.copy_status = Some("Saved model to ./model.rs".into());
+                if ui
+                    .add_enabled(
+                        state.export_enabled(),
+                        egui::Button::new("💾 Export model.rs"),
+                    )
+                    .clicked()
+                {
+                    self.copy_status = Some(
+                        match state.export_model_bundle(Path::new("model.rs")) {
+                            Ok(message) => message,
+                            Err(error) => error,
+                        },
+                    );
                 }
 
-                if ui.button("📋 Copy Code").clicked() {
+                if ui
+                    .add_enabled(state.export_enabled(), egui::Button::new("📋 Copy Code"))
+                    .clicked()
+                {
                     ui.ctx().copy_text(state.generated_rust_code.clone());
                     self.copy_status = Some("Rust code copied to clipboard!".into());
                 }
@@ -41,8 +80,62 @@ impl CodegenView {
 
         ui.add_space(4.0);
         ui.label(
-            "Directly compiles the trained network weights, quantization parameters, and static SRAM arena offsets into a standalone #![no_std] Rust module calling embedded-nn CMSIS-NN/s4 kernels with zero heap allocation.",
+            "Generates a standalone #![no_std] Rust module from the active ModelGraph, using embedded-nn integer kernels and static arena offsets.",
         );
+        ui.label(format!("Source: {}", state.model_source.display_name()));
+        if !state.production_export_eligible() {
+            ui.colored_label(
+                egui::Color32::from_rgb(245, 170, 60),
+                "WARNING: Demo trainer output is educational and is not production-qualified.",
+            );
+            ui.checkbox(
+                &mut state.allow_demo_export,
+                "I understand; enable copy/export of this demo model",
+            );
+        }
+        if ui
+            .add_enabled(
+                matches!(
+                    state.model_source,
+                    crate::state::ModelSource::ImportedTflite(_)
+                ),
+                egui::Button::new("Compare TFLite golden"),
+            )
+            .clicked()
+        {
+            state.compare_imported_tflite_golden();
+        }
+        if let Some(status) = &state.golden_status {
+            ui.colored_label(egui::Color32::from_rgb(180, 210, 255), status);
+        }
+        if let Some(graph) = &state.compiled_graph {
+            for (index, tensor_id) in graph.inputs.iter().enumerate() {
+                if let Some(tensor) = graph.tensors.iter().find(|tensor| tensor.id == *tensor_id) {
+                    ui.label(format!(
+                        "Input {index} '{}': [{}, {}, {}, {}], {:?}, scale {}, zero-point {}",
+                        tensor.name,
+                        tensor.shape.batches,
+                        tensor.shape.height,
+                        tensor.shape.width,
+                        tensor.shape.channels,
+                        tensor.dtype,
+                        tensor.quant.scale,
+                        tensor.quant.zero_point
+                    ));
+                }
+            }
+            for (index, tensor_id) in graph.outputs.iter().enumerate() {
+                if let Some(tensor) = graph.tensors.iter().find(|tensor| tensor.id == *tensor_id) {
+                    ui.label(format!(
+                        "Output {index} '{}': {} values, scale {}, zero-point {}",
+                        tensor.name,
+                        tensor.shape.total_elements(),
+                        tensor.quant.scale,
+                        tensor.quant.zero_point
+                    ));
+                }
+            }
+        }
         ui.add_space(8.0);
 
         // Split Layout: Left is Interactive Live Inference Playground, Right is Generated Rust Code
@@ -58,12 +151,27 @@ impl CodegenView {
                         if ui.button("⚡ Run Predict").clicked() {
                             state.run_test_inference();
                         }
+                        let device_ready = device_link.is_some_and(|link| link.is_handshaked());
+                        if ui
+                            .add_enabled(device_ready, egui::Button::new("Run on device"))
+                            .clicked()
+                        {
+                            state.run_test_inference();
+                            if let Some(link) = device_link {
+                                let input: Vec<u8> = state
+                                    .test_input_vector
+                                    .iter()
+                                    .map(|&value| value as u8)
+                                    .collect();
+                                link.infer(1, 0, input);
+                            }
+                        }
                     });
                 });
 
                 ui.add_space(4.0);
 
-                if !state.samples.is_empty() {
+                if !state.model_source.is_imported() && !state.samples.is_empty() {
                     ui.horizontal(|ui| {
                         ui.label("Load Dataset Vector:");
                         self.selected_test_sample_idx =
@@ -99,7 +207,11 @@ impl CodegenView {
                 }
 
                 ui.separator();
-                ui.label("Predicted Class Probabilities (Softmax):");
+                ui.label(if state.model_source.is_imported() {
+                    "Integer graph output (dequantized for probability display):"
+                } else {
+                    "Demo float preview probabilities:"
+                });
                 ui.add_space(4.0);
 
                 let mut highest_idx = 0;
@@ -132,8 +244,22 @@ impl CodegenView {
                     });
                 }
 
+                if let Some(cycles) = state.last_device_cycles {
+                    ui.label(format!(
+                        "Device: {cycles} DWT cycles, logits {:?}",
+                        state.last_device_logits
+                    ));
+                    if !state.last_device_logits.is_empty()
+                        && state.last_device_logits == state.test_output_logits
+                    {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(80, 220, 120),
+                            "Device logits match host interpreter.",
+                        );
+                    }
+                }
+
                 ui.separator();
-                ui.label("Input Feature Sliders (Int8 quantized):");
                 egui::ScrollArea::vertical()
                     .id_salt("codegen_feature_sliders_scroll")
                     .auto_shrink([false; 2])
@@ -153,6 +279,29 @@ impl CodegenView {
                             state.run_test_inference();
                         }
                     });
+                let mut additional_changed = false;
+                for (input_index, values) in
+                    state.test_additional_input_vectors.iter_mut().enumerate()
+                {
+                    ui.separator();
+                    ui.label(format!(
+                        "Input Tensor {} (Int8 quantized):",
+                        input_index + 1
+                    ));
+                    let mut changed = false;
+                    for (value_index, value) in values.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("Value {value_index}:"));
+                            if ui.add(egui::Slider::new(value, -128..=127)).changed() {
+                                changed = true;
+                            }
+                        });
+                    }
+                    additional_changed |= changed;
+                }
+                if additional_changed {
+                    state.run_test_inference();
+                }
             });
 
             // Right Column: Generated #![no_std] Rust Source Code with Syntax Highlighting

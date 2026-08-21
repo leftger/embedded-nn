@@ -1,8 +1,9 @@
 use clap::{Parser, Subcommand};
 use embedded_nn_codegen::RustCodeGenerator;
 use embedded_nn_compiler::arena::ArenaScheduler;
+use embedded_nn_compiler::dsp_contract::DspContract;
 use embedded_nn_compiler::ir::ModelGraph;
-use embedded_nn_live::host::UsbBridge;
+use embedded_nn_live::host::{OwnedMsg, Transport, UsbBridge, handshake};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
@@ -39,8 +40,13 @@ enum Commands {
         #[arg(short, long)]
         out: PathBuf,
     },
-    /// List connected USB devices for live streaming
+    /// List connected embedded-nn USB-HS bulk agents (VID 0x1209 / PID 0xE612)
     Devices,
+    /// Hardware-in-the-loop over the live USB protocol
+    Hil {
+        #[command(subcommand)]
+        action: HilAction,
+    },
     /// Work with JSON Lines dataset interchange files
     Dataset {
         #[command(subcommand)]
@@ -52,6 +58,25 @@ enum Commands {
 enum DatasetAction {
     /// Report record count, channel-shape consistency and label distribution
     Validate { path: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum HilAction {
+    /// Handshake and Ping/Pong with the first (or selected) agent
+    Ping {
+        #[arg(long)]
+        device: Option<String>,
+    },
+    /// Run integer inference on the device
+    Infer {
+        #[arg(long)]
+        device: Option<String>,
+        /// Comma-separated i8 input tensor
+        #[arg(long)]
+        input: String,
+        #[arg(long, default_value_t = 0)]
+        model_id: u32,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -66,7 +91,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if let Some(out_path) = out {
                 fs::write(&out_path, &code)?;
+                let sidecar = out_path.with_file_name("dsp_contract.json");
+                let contract = DspContract {
+                    version: DspContract::VERSION,
+                    window_type: "hann".into(),
+                    window_size: 64,
+                    num_mel_bins: 16,
+                    high_pass_cutoff_hz: 10.0,
+                    sample_rate_hz: 100.0,
+                    frame_hop_size: 32,
+                    capture_samples: 256,
+                    input_scale: 1.0 / 127.0,
+                    input_zero_point: 0,
+                };
+                fs::write(&sidecar, serde_json::to_string_pretty(&contract)?)?;
                 println!("Generated Rust inference code written to {:?}", out_path);
+                println!("DSP contract written to {:?}", sidecar);
             } else {
                 println!("{}", code);
             }
@@ -117,16 +157,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Commands::Devices => {
-            println!("Scanning for USB devices...");
-            let devs = UsbBridge::list_devices();
+            println!("Scanning for embedded-nn agents (1209:e612)...");
+            let devs = UsbBridge::enumerate_nn_agents()?;
             if devs.is_empty() {
-                println!("No devices detected.");
+                println!("No agents detected.");
             } else {
                 for (i, dev) in devs.iter().enumerate() {
-                    println!("  [{}] {}", i, dev);
+                    println!("  [{}] {}  {}", i, dev.stable_id(), dev.display_name());
                 }
             }
         }
+        Commands::Hil { action } => match action {
+            HilAction::Ping { device } => {
+                let mut transport = open_agent(device.as_deref())?;
+                let ready = handshake(&mut transport, 0, 0, 0)?;
+                println!("Ready: {ready:?}");
+                transport.send(&OwnedMsg::Ping)?;
+                match transport.receive()? {
+                    OwnedMsg::Pong => println!("Pong"),
+                    other => println!("unexpected {other:?}"),
+                }
+            }
+            HilAction::Infer {
+                device,
+                input,
+                model_id,
+            } => {
+                let bytes = parse_i8_csv(&input)?;
+                let mut transport = open_agent(device.as_deref())?;
+                let ready = handshake(&mut transport, model_id, bytes.len() as u32, 0)?;
+                println!("Ready: {ready:?}");
+                transport.send(&OwnedMsg::RunInference {
+                    seq: 1,
+                    model_id,
+                    input: bytes,
+                })?;
+                match transport.receive()? {
+                    OwnedMsg::InferenceResult {
+                        seq,
+                        execution_cycles,
+                        execution_time_us,
+                        logits,
+                        ..
+                    } => {
+                        println!(
+                            "seq={seq} cycles={execution_cycles} time_us={execution_time_us} logits={logits:?}"
+                        );
+                    }
+                    other => println!("unexpected {other:?}"),
+                }
+            }
+        },
         Commands::Dataset {
             action: DatasetAction::Validate { path },
         } => {
@@ -187,4 +268,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+fn open_agent(
+    device: Option<&str>,
+) -> Result<embedded_nn_live::host::UsbTransport, Box<dyn std::error::Error>> {
+    let agents = UsbBridge::enumerate_nn_agents()?;
+    let chosen = if let Some(id) = device {
+        agents
+            .into_iter()
+            .find(|agent| agent.stable_id() == id || agent.display_name() == id)
+            .ok_or_else(|| format!("no agent matching {id}"))?
+    } else {
+        agents.into_iter().next().ok_or("no embedded-nn agent connected")?
+    };
+    println!("Opening {}", chosen.stable_id());
+    Ok(chosen.open()?)
+}
+
+fn parse_i8_csv(input: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    input
+        .split(',')
+        .map(|part| {
+            let value: i8 = part.trim().parse()?;
+            Ok::<u8, Box<dyn std::error::Error>>(value as u8)
+        })
+        .collect()
 }

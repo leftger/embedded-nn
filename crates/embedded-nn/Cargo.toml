@@ -16,9 +16,11 @@ alloc = []
 float = []
 simd = []
 libm = ["dep:libm"]
+dsp = ["dep:embedded-dsp", "libm"]
 
 [dependencies]
 libm = { workspace = true, optional = true }
+embedded-dsp = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

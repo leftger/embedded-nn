@@ -8,8 +8,9 @@
 //! - `INT8` and `UINT8` quantized tensors are supported. UINT8 tensors are rewritten to INT8
 //!   storage by subtracting 128 from values and zero-points; no UINT8 runtime kernels are used.
 //! - Only subgraph 0 is imported; models with control-flow subgraphs are not supported.
-//! - Supported operators: `FULLY_CONNECTED`, `CONV_2D`, `DEPTHWISE_CONV_2D`, `MAX_POOL_2D`,
-//!   `AVERAGE_POOL_2D`, `SOFTMAX`, `RESHAPE`, `ADD`, and the runtime-supported `TRANSPOSE` forms.
+//! - Supported operators: `FULLY_CONNECTED`, `CONV_2D` (1-high kernels import as `Conv1D`),
+//!   `DEPTHWISE_CONV_2D`, `MAX_POOL_2D`, `AVERAGE_POOL_2D`, `SOFTMAX`, `RESHAPE`, `ADD`,
+//!   `TRANSPOSE`, `PAD`/`PADV2`, `MEAN`, and `SVDF`.
 //! - SAME padding is represented exactly, including odd totals where bottom/right differ from
 //!   top/left. VALID padding is represented as zero on every side.
 //! - Per-channel quantization is respected for `CONV_2D`/`DEPTHWISE_CONV_2D`/`FULLY_CONNECTED`
@@ -200,6 +201,32 @@ pub fn import_tflite(bytes: &[u8]) -> Result<ModelGraph, ImportError> {
                 &output_tensor,
                 &layer_name,
             )?,
+            tflite::BuiltinOperator::PAD | tflite::BuiltinOperator::PADV2 => import_pad(
+                &mut builder,
+                &operator,
+                &tensors,
+                &buffers,
+                in_id,
+                &layer_name,
+            )?,
+            tflite::BuiltinOperator::MEAN => import_mean(
+                &mut builder,
+                &operator,
+                &tensors,
+                &buffers,
+                in_id,
+                &layer_name,
+            )?,
+            tflite::BuiltinOperator::SVDF => import_svdf(
+                &mut builder,
+                &operator,
+                &tensors,
+                &buffers,
+                in_id,
+                input_scale,
+                &output_tensor,
+                &layer_name,
+            )?,
             other => {
                 return Err(ImportError::UnsupportedOperator(
                     other.variant_name().unwrap_or("UNKNOWN"),
@@ -215,7 +242,10 @@ pub fn import_tflite(bytes: &[u8]) -> Result<ModelGraph, ImportError> {
                 | tflite::BuiltinOperator::AVERAGE_POOL_2D
                 | tflite::BuiltinOperator::SOFTMAX
                 | tflite::BuiltinOperator::RESHAPE
-                | tflite::BuiltinOperator::TRANSPOSE
+                |             tflite::BuiltinOperator::TRANSPOSE
+                | tflite::BuiltinOperator::PAD
+                | tflite::BuiltinOperator::PADV2
+                | tflite::BuiltinOperator::MEAN
         ) {
             let (multiplier, shift) = quantize_multiplier(out_scale);
             builder
@@ -624,6 +654,29 @@ fn import_conv2d(
         build_output_quant(input_scale, &weight_scales, output_tensor)?;
     let activation = read_activation(opts.fused_activation_function())?;
 
+    if in_h == 1
+        && kernel_h == 1
+        && pad_top == 0
+        && pad_bottom == 0
+        && dilation_h == 1
+        && pad_left == pad_right
+        && per_channel_quant.is_none()
+    {
+        return Ok(builder.add_conv1d_layer(
+            name,
+            in_id,
+            out_channels,
+            kernel_w,
+            stride_w,
+            pad_left,
+            dilation_w,
+            weights,
+            bias,
+            activation,
+            Some(output_quant),
+        ));
+    }
+
     Ok(builder.add_conv2d_layer(
         name,
         in_id,
@@ -899,6 +952,180 @@ fn import_transpose(
     builder
         .add_transpose_layer(name, input_id, &permutation)
         .map_err(|message| ImportError::UnsupportedConfiguration(message.into()))
+}
+
+fn import_pad(
+    builder: &mut ModelBuilder,
+    operator: &tflite::Operator,
+    tensors: &flatbuffers::Vector<flatbuffers::ForwardsUOffset<tflite::Tensor>>,
+    buffers: &flatbuffers::Vector<flatbuffers::ForwardsUOffset<tflite::Buffer>>,
+    input_id: usize,
+    name: &str,
+) -> Result<usize, ImportError> {
+    let op_inputs = operator
+        .inputs()
+        .ok_or(ImportError::MissingField("operator.inputs"))?;
+    if op_inputs.len() < 2 {
+        return Err(ImportError::UnsupportedConfiguration(
+            "PAD requires a paddings tensor".into(),
+        ));
+    }
+    let pads = read_i32_buffer(&tensors.get(op_inputs.get(1) as usize), buffers)?;
+    if pads.len() != 8 {
+        return Err(ImportError::UnsupportedConfiguration(
+            "PAD currently supports rank-4 NHWC paddings [4,2]".into(),
+        ));
+    }
+    if pads[0] != 0 || pads[1] != 0 || pads[6] != 0 || pads[7] != 0 {
+        return Err(ImportError::UnsupportedConfiguration(
+            "PAD on batch or channel axes is not supported".into(),
+        ));
+    }
+    let pad_value = if op_inputs.len() >= 3 && op_inputs.get(2) >= 0 {
+        *read_i8_buffer(&tensors.get(op_inputs.get(2) as usize), buffers)?
+            .first()
+            .ok_or(ImportError::UnsupportedConfiguration(
+                "PADV2 constant_values is empty".into(),
+            ))?
+    } else {
+        0
+    };
+    Ok(builder.add_pad_layer(
+        name,
+        input_id,
+        Padding2D::new(
+            pads[2] as usize,
+            pads[3] as usize,
+            pads[4] as usize,
+            pads[5] as usize,
+        ),
+        pad_value,
+    ))
+}
+
+fn import_mean(
+    builder: &mut ModelBuilder,
+    operator: &tflite::Operator,
+    tensors: &flatbuffers::Vector<flatbuffers::ForwardsUOffset<tflite::Tensor>>,
+    buffers: &flatbuffers::Vector<flatbuffers::ForwardsUOffset<tflite::Buffer>>,
+    input_id: usize,
+    name: &str,
+) -> Result<usize, ImportError> {
+    let op_inputs = operator
+        .inputs()
+        .ok_or(ImportError::MissingField("operator.inputs"))?;
+    if op_inputs.len() < 2 {
+        return Err(ImportError::UnsupportedConfiguration(
+            "MEAN requires an axes tensor".into(),
+        ));
+    }
+    let axes = read_i32_buffer(&tensors.get(op_inputs.get(1) as usize), buffers)?;
+    let input_tensor = tensors.get(op_inputs.get(0) as usize);
+    let rank = input_tensor
+        .shape()
+        .ok_or(ImportError::MissingField("MEAN input shape"))?
+        .len();
+    let keep_dims = operator
+        .builtin_options_as_reducer_options()
+        .map(|o| o.keep_dims())
+        .unwrap_or(false);
+    let mut reduce_height = false;
+    let mut reduce_width = false;
+    let mut reduce_channels = false;
+    for axis in axes {
+        let axis = if axis < 0 { rank as i32 + axis } else { axis };
+        match (rank, axis) {
+            (4, 1) => reduce_height = true,
+            (4, 2) => reduce_width = true,
+            (4, 3) => reduce_channels = true,
+            (2, 0) => reduce_width = true,
+            (2, 1) => reduce_channels = true,
+            (1, 0) => reduce_channels = true,
+            (4, 0) => {
+                return Err(ImportError::UnsupportedConfiguration(
+                    "MEAN over batch is not supported".into(),
+                ));
+            }
+            _ => {
+                return Err(ImportError::UnsupportedConfiguration(format!(
+                    "unsupported MEAN axis {axis} for rank {rank}"
+                )));
+            }
+        }
+    }
+    Ok(builder.add_mean_layer(
+        name,
+        input_id,
+        reduce_height,
+        reduce_width,
+        reduce_channels,
+        keep_dims,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn import_svdf(
+    builder: &mut ModelBuilder,
+    operator: &tflite::Operator,
+    tensors: &flatbuffers::Vector<flatbuffers::ForwardsUOffset<tflite::Tensor>>,
+    buffers: &flatbuffers::Vector<flatbuffers::ForwardsUOffset<tflite::Buffer>>,
+    in_id: usize,
+    input_scale: f32,
+    output_tensor: &tflite::Tensor,
+    name: &str,
+) -> Result<usize, ImportError> {
+    let op_inputs = operator
+        .inputs()
+        .ok_or(ImportError::MissingField("operator.inputs"))?;
+    if op_inputs.len() < 3 {
+        return Err(ImportError::UnsupportedConfiguration(
+            "SVDF requires feature and time weights".into(),
+        ));
+    }
+    let opts = operator
+        .builtin_options_as_svdfoptions()
+        .ok_or(ImportError::MissingField("SVDFOptions"))?;
+    let rank = opts.rank().max(1) as usize;
+    let weights_feature = read_i8_buffer(&tensors.get(op_inputs.get(1) as usize), buffers)?;
+    let weights_time = read_i8_buffer(&tensors.get(op_inputs.get(2) as usize), buffers)?;
+    let bias = optional_bias(&op_inputs, 3, tensors, buffers)?;
+    let input_dim = builder
+        .tensor_desc(in_id)
+        .map(|t| t.shape.total_elements())
+        .ok_or(ImportError::UnresolvedInput(op_inputs.get(0) as usize))?;
+    if input_dim == 0 || weights_feature.len() % input_dim != 0 {
+        return Err(ImportError::UnsupportedConfiguration(
+            "SVDF feature weights are not a multiple of input dim".into(),
+        ));
+    }
+    let feature_dim = weights_feature.len() / input_dim;
+    if rank == 0 || feature_dim % rank != 0 {
+        return Err(ImportError::UnsupportedConfiguration(
+            "SVDF feature_dim must be divisible by rank".into(),
+        ));
+    }
+    let units = feature_dim / rank;
+    if feature_dim == 0 || weights_time.len() % feature_dim != 0 {
+        return Err(ImportError::UnsupportedConfiguration(
+            "SVDF time weights are not a multiple of feature dim".into(),
+        ));
+    }
+    let memory_size = weights_time.len() / feature_dim;
+    let weight_scales = read_scales(&tensors.get(op_inputs.get(1) as usize))?;
+    let (output_quant, _) = build_output_quant(input_scale, &weight_scales, output_tensor)?;
+    let activation = read_activation(opts.fused_activation_function())?;
+    Ok(builder.add_svdf_layer(
+        name,
+        in_id,
+        units,
+        rank,
+        memory_size,
+        weights_feature,
+        weights_time,
+        bias,
+        activation,
+        Some(output_quant),
+    ))
 }
 
 #[cfg(any(test, feature = "fixture-generation"))]
@@ -2106,5 +2333,82 @@ mod tests {
                 "{name} is stale; rerun the generator"
             );
         }
+    }
+
+    #[test]
+    fn host_interpreter_matches_sine_and_tinyconv_fixture_vectors() {
+        let sine = import_tflite(&build_sine_fc_model()).unwrap();
+        let mut sine_host = embedded_nn_compiler::HostInterpreter::new(&sine).unwrap();
+        for value in [-127i8, 0, 127] {
+            let output = sine_host.run(&[&[value]]).unwrap();
+            assert_eq!(output[0], vec![value]);
+        }
+
+        let tinyconv = import_tflite(&build_conv_pool_reshape_fc_softmax_model()).unwrap();
+        let input_len = tinyconv
+            .tensors
+            .iter()
+            .find(|tensor| tinyconv.inputs.contains(&tensor.id))
+            .unwrap()
+            .shape
+            .total_elements();
+        let input = vec![0i8; input_len];
+        let mut tinyconv_host = embedded_nn_compiler::HostInterpreter::new(&tinyconv).unwrap();
+        let output = tinyconv_host.run(&[&input]).unwrap();
+        assert_eq!(output[0], vec![-64, -64, -64, -64]);
+    }
+
+    #[test]
+    fn host_interpreter_uses_both_add_inputs_and_transposes_result() {
+        let graph = import_tflite(&build_add_transpose_model()).unwrap();
+        let mut host = embedded_nn_compiler::HostInterpreter::new(&graph).unwrap();
+        let left = [1i8, 2, 3, 4, 5, 6];
+        let right = [7i8, 8, 9, 10, 11, 12];
+        let output = host.run(&[&left, &right]).unwrap();
+        // Golden vector from the fixture's TFLite quantization parameters, after RELU6 and [1,0].
+        assert_eq!(output[0], vec![-1, 17, 5, 23, 11, 29]);
+    }
+
+    #[test]
+    fn host_interpreter_returns_explicit_unsupported_lstm_error() {
+        let mut graph = ModelGraph::new("unsupported");
+        graph.tensors = vec![
+            TensorDesc {
+                id: 0,
+                name: "input".into(),
+                shape: TensorShape::new_1d(1),
+                dtype: DataType::Int8,
+                quant: QuantParams::default(),
+            },
+            TensorDesc {
+                id: 1,
+                name: "output".into(),
+                shape: TensorShape::new_1d(1),
+                dtype: DataType::Int8,
+                quant: QuantParams::default(),
+            },
+        ];
+        graph.inputs = vec![0];
+        graph.outputs = vec![1];
+        graph.layers.push(LayerNode {
+            id: 0,
+            name: "lstm".into(),
+            inputs: vec![0],
+            outputs: vec![1],
+            op: OpPayload::LstmStep {
+                hidden_dim: 1,
+                input_weights: vec![],
+                recurrent_weights: vec![],
+                bias: vec![],
+            },
+        });
+        let mut host = embedded_nn_compiler::HostInterpreter::new(&graph).unwrap();
+        assert!(matches!(
+            host.run(&[&[0]]),
+            Err(embedded_nn_compiler::InterpreterError::UnsupportedOp {
+                operation: "LstmStep",
+                ..
+            })
+        ));
     }
 }

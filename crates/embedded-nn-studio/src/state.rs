@@ -1,18 +1,16 @@
-use embedded_dsp::complex_math::cmplx_mag_f32;
-use embedded_dsp::filter_design::biquad_highpass_coeffs;
-use embedded_dsp::filtering::{BiquadCascadeInstanceF32, biquad_cascade_df1_f32};
-use embedded_dsp::transform::rfft_f32;
-use embedded_dsp::window::{apply_window_f32, hamming_f32, hanning_f32};
-use embedded_nn::mel_filterbank_f32;
+use embedded_nn::feature_dsp::{FeatureDspConfig, WindowKind, extract_mel_sequence, quantize_mel_s8};
 use embedded_nn_codegen::RustCodeGenerator;
 use embedded_nn_compiler::arena::{ArenaPlan, ArenaScheduler};
 use embedded_nn_compiler::builder::ModelBuilder;
+use embedded_nn_compiler::dsp_contract::DspContract;
+use embedded_nn_compiler::interpreter::HostInterpreter;
 use embedded_nn_compiler::ir::*;
 use embedded_nn_compiler::quant::{
     calculate_asymmetric_quant_s8, calculate_output_requant_multiplier,
     calculate_symmetric_quant_s8, quantize_and_pack_weights_s4, quantize_weights_s8,
 };
 use std::f32::consts::PI;
+use std::path::{Path, PathBuf};
 
 /// Number of output channels for the `TinyConv1D` temporal convolution frontend.
 const CONV1D_OUT_CHANNELS: usize = 4;
@@ -68,6 +66,50 @@ pub struct DspConfig {
     pub capture_samples: usize,
 }
 
+impl WindowFunction {
+    fn contract_name(self) -> &'static str {
+        match self {
+            Self::Hann => "hann",
+            Self::Hamming => "hamming",
+            Self::Rectangular => "rectangular",
+        }
+    }
+}
+
+impl DspConfig {
+    pub fn to_contract(&self) -> DspContract {
+        DspContract {
+            version: DspContract::VERSION,
+            window_type: self.window_type.contract_name().into(),
+            window_size: self.window_size,
+            num_mel_bins: self.num_mel_bins,
+            high_pass_cutoff_hz: self.high_pass_cutoff,
+            sample_rate_hz: self.sample_rate,
+            frame_hop_size: self.frame_hop_size,
+            capture_samples: self.capture_samples,
+            input_scale: INPUT_FEATURE_SCALE,
+            input_zero_point: 0,
+        }
+    }
+
+    pub fn to_feature_config(&self) -> FeatureDspConfig {
+        FeatureDspConfig {
+            window_size: self.window_size,
+            window_kind: match self.window_type {
+                WindowFunction::Hann => WindowKind::Hann,
+                WindowFunction::Hamming => WindowKind::Hamming,
+                WindowFunction::Rectangular => WindowKind::Rectangular,
+            },
+            num_mel_bins: self.num_mel_bins,
+            high_pass_cutoff_hz: self.high_pass_cutoff,
+            sample_rate_hz: self.sample_rate,
+            frame_hop_size: self.frame_hop_size,
+            capture_samples: self.capture_samples,
+            input_scale: INPUT_FEATURE_SCALE,
+        }
+    }
+}
+
 impl Default for DspConfig {
     fn default() -> Self {
         Self {
@@ -93,7 +135,34 @@ pub enum ModelArchitecture {
 pub enum QuantizationMode {
     Int4SubByte,
     Int8FixedPoint,
-    Int16HighPrecision,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelSource {
+    DemoTrainer,
+    ImportedTflite(PathBuf),
+    ImportedJson(PathBuf),
+}
+
+impl ModelSource {
+    pub fn display_name(&self) -> String {
+        match self {
+            Self::DemoTrainer => "Demo trainer (not production)".into(),
+            Self::ImportedTflite(path) => format!("Imported TFLite: {}", path.display()),
+            Self::ImportedJson(path) => format!("Imported ModelGraph JSON: {}", path.display()),
+        }
+    }
+
+    pub fn is_imported(&self) -> bool {
+        !matches!(self, Self::DemoTrainer)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelImportStatus {
+    Idle,
+    Imported(String),
+    Error(String),
 }
 
 #[derive(Debug, Clone)]
@@ -118,6 +187,10 @@ impl Default for ModelConfig {
 }
 
 pub struct StudioState {
+    pub model_source: ModelSource,
+    pub model_import_status: ModelImportStatus,
+    pub allow_demo_export: bool,
+
     // Dataset & Classes
     pub classes: Vec<String>,
     pub samples: Vec<DatasetSample>,
@@ -159,13 +232,21 @@ pub struct StudioState {
 
     // Live Sensor / HIL Test Vector
     pub test_input_vector: Vec<i8>,
+    pub test_additional_input_vectors: Vec<Vec<i8>>,
     pub test_output_logits: Vec<i8>,
     pub test_probabilities: Vec<f32>,
+    pub golden_status: Option<String>,
+    pub last_device_cycles: Option<u32>,
+    pub last_device_logits: Vec<i8>,
 }
 
 impl Default for StudioState {
     fn default() -> Self {
         let mut state = Self {
+            model_source: ModelSource::DemoTrainer,
+            model_import_status: ModelImportStatus::Idle,
+            allow_demo_export: false,
+
             classes: vec![
                 "idle".into(),
                 "wave_left".into(),
@@ -201,8 +282,12 @@ impl Default for StudioState {
             generated_rust_code: String::new(),
 
             test_input_vector: vec![0; 16],
+            test_additional_input_vectors: Vec::new(),
             test_output_logits: vec![0; 4],
             test_probabilities: vec![0.25; 4],
+            golden_status: None,
+            last_device_cycles: None,
+            last_device_logits: Vec::new(),
         };
 
         // Populate with rich starter demo dataset
@@ -216,6 +301,130 @@ impl Default for StudioState {
 }
 
 impl StudioState {
+    pub fn production_export_eligible(&self) -> bool {
+        self.model_source.is_imported()
+    }
+
+    pub fn export_enabled(&self) -> bool {
+        self.production_export_eligible() || self.allow_demo_export
+    }
+
+    pub fn use_demo_trainer(&mut self) {
+        self.model_source = ModelSource::DemoTrainer;
+        self.model_import_status = ModelImportStatus::Idle;
+        self.allow_demo_export = false;
+        self.reset_training();
+        self.run_simulated_training(30);
+        self.rebuild_model_graph_and_codegen();
+    }
+
+    pub fn import_tflite_path(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
+        let path = path.as_ref().to_path_buf();
+        let result = std::fs::read(&path)
+            .map_err(|error| format!("{}: {error}", path.display()))
+            .and_then(|bytes| {
+                embedded_nn_tflite::import_tflite(&bytes).map_err(|error| error.to_string())
+            })
+            .and_then(|graph| {
+                self.install_imported_graph(graph, ModelSource::ImportedTflite(path))
+            });
+        if let Err(error) = &result {
+            self.model_import_status = ModelImportStatus::Error(error.clone());
+        }
+        result
+    }
+
+    pub fn import_json_path(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
+        let path = path.as_ref().to_path_buf();
+        let result = std::fs::read_to_string(&path)
+            .map_err(|error| format!("{}: {error}", path.display()))
+            .and_then(|json| serde_json::from_str(&json).map_err(|error| error.to_string()))
+            .and_then(|graph| self.install_imported_graph(graph, ModelSource::ImportedJson(path)));
+        if let Err(error) = &result {
+            self.model_import_status = ModelImportStatus::Error(error.clone());
+        }
+        result
+    }
+
+    pub fn install_imported_graph(
+        &mut self,
+        graph: ModelGraph,
+        source: ModelSource,
+    ) -> Result<(), String> {
+        if !source.is_imported() {
+            return Err("install_imported_graph requires an imported source".into());
+        }
+        HostInterpreter::new(&graph).map_err(|error| error.to_string())?;
+        let input_vectors: Vec<Vec<i8>> = graph
+            .inputs
+            .iter()
+            .map(|id| {
+                graph
+                    .tensors
+                    .iter()
+                    .find(|tensor| tensor.id == *id)
+                    .map(|tensor| {
+                        vec![
+                            tensor
+                                .quant
+                                .zero_point
+                                .clamp(i8::MIN as i32, i8::MAX as i32)
+                                as i8;
+                            tensor.shape.total_elements()
+                        ]
+                    })
+                    .ok_or_else(|| format!("imported graph input tensor {id} is missing"))
+            })
+            .collect::<Result<_, _>>()?;
+        let output_len = graph
+            .outputs
+            .first()
+            .and_then(|id| graph.tensors.iter().find(|tensor| tensor.id == *id))
+            .map(|tensor| tensor.shape.total_elements())
+            .ok_or_else(|| "imported graph has no valid output".to_string())?;
+
+        self.is_training = false;
+        self.current_epoch = 0;
+        self.train_loss_history.clear();
+        self.val_acc_history.clear();
+        self.weights_fc1.clear();
+        self.bias_fc1.clear();
+        self.weights_fc2.clear();
+        self.bias_fc2.clear();
+        self.conv1d_weights.clear();
+        self.conv1d_bias.clear();
+        self.svdf_weights_feature.clear();
+        self.svdf_weights_time.clear();
+        self.svdf_bias.clear();
+        self.allow_demo_export = false;
+        let mut input_vectors = input_vectors.into_iter();
+        self.test_input_vector = input_vectors.next().unwrap_or_default();
+        self.test_additional_input_vectors = input_vectors.collect();
+        self.test_output_logits = vec![0; output_len];
+        self.test_probabilities = vec![0.0; output_len];
+        self.classes = (0..output_len)
+            .map(|index| format!("output_{index}"))
+            .collect();
+        self.model_source = source;
+        self.compiled_graph = Some(graph);
+        self.refresh_graph_artifacts();
+        self.model_import_status = ModelImportStatus::Imported(self.model_source.display_name());
+        Ok(())
+    }
+
+    fn refresh_graph_artifacts(&mut self) {
+        if let Some(graph) = &self.compiled_graph {
+            self.arena_plan = Some(ArenaScheduler::schedule(graph));
+            let struct_name = if self.model_source.is_imported() {
+                "ImportedModel"
+            } else {
+                "GestureNeuralNet"
+            };
+            self.generated_rust_code = RustCodeGenerator::new(struct_name).generate(graph);
+        }
+        self.run_test_inference();
+    }
+
     /// Loads a multi-class synthetic IMU gesture dataset for instant interactive experimentation
     pub fn load_demo_dataset(&mut self) {
         self.samples.clear();
@@ -273,9 +482,7 @@ impl StudioState {
     /// window/hop configuration. Deterministic and identical across all samples, so every
     /// architecture's weight shapes stay fixed regardless of an individual recording's length.
     pub(crate) fn num_frames_for_config(dsp: &DspConfig) -> usize {
-        let capture = dsp.capture_samples.max(dsp.window_size);
-        let hop = dsp.frame_hop_size.max(1);
-        (capture - dsp.window_size) / hop + 1
+        dsp.to_feature_config().num_frames()
     }
 
     /// Effective TinyConv1D kernel width and resulting output width for the current frame count.
@@ -288,101 +495,20 @@ impl StudioState {
         (kernel_w, out_width)
     }
 
-    /// Truncates or zero-pads `raw` to exactly `capture_samples`, so every sample yields the same
-    /// number of frames regardless of how long the original recording was.
-    fn normalize_raw_to_capture_length(raw: &[f32], capture_samples: usize) -> Vec<f32> {
-        let mut buf = vec![0.0f32; capture_samples];
-        let n = raw.len().min(capture_samples);
-        buf[..n].copy_from_slice(&raw[..n]);
-        buf
-    }
-
-    /// Applies the (optional) high-pass biquad filter over the full continuous signal, before
-    /// framing -- filtering per-frame independently would reset filter state at every frame
-    /// boundary and corrupt the response, especially with overlapping frames.
-    fn apply_high_pass_filter(dsp: &DspConfig, raw: &[f32]) -> Vec<f32> {
-        if dsp.high_pass_cutoff <= 0.0 {
-            return raw.to_vec();
-        }
-        let coeffs = biquad_highpass_coeffs(dsp.high_pass_cutoff, dsp.sample_rate, 0.7071);
-        let mut hp_state = [0.0f32; 4];
-        let mut instance = BiquadCascadeInstanceF32::init(1, &coeffs, &mut hp_state);
-        let mut filtered = vec![0.0f32; raw.len()];
-        biquad_cascade_df1_f32(&mut instance, raw, &mut filtered);
-        filtered
-    }
-
-    /// Real Window -> FFT -> magnitude -> Mel-filterbank feature extraction for a single frame.
-    /// `frame.len()` must equal `dsp.window_size`; `window_size` must be a power of two
-    /// (embedded-dsp's FFT constraint -- Studio's UI only offers power-of-two sizes).
-    fn extract_frame_features(dsp: &DspConfig, frame: &[f32]) -> Vec<f32> {
-        let n = dsp.window_size;
-        let mut windowed = frame.to_vec();
-        windowed.resize(n, 0.0);
-
-        match dsp.window_type {
-            WindowFunction::Hann => {
-                let mut win = vec![0.0f32; n];
-                hanning_f32(&mut win);
-                apply_window_f32(&mut windowed, &win);
-            }
-            WindowFunction::Hamming => {
-                let mut win = vec![0.0f32; n];
-                hamming_f32(&mut win);
-                apply_window_f32(&mut windowed, &win);
-            }
-            WindowFunction::Rectangular => {}
-        }
-
-        let mut spectrum = vec![0.0f32; 2 * n];
-        rfft_f32(&windowed, &mut spectrum, n, 0);
-
-        let mut mag = vec![0.0f32; n];
-        cmplx_mag_f32(&spectrum, &mut mag);
-
-        let half = n / 2;
-        let min_freq = dsp.high_pass_cutoff.max(1.0);
-        let max_freq = (dsp.sample_rate / 2.0).max(min_freq + 1.0);
-
-        let mut mel_energies = vec![0.0f32; dsp.num_mel_bins];
-        mel_filterbank_f32(
-            &mag[..half],
-            dsp.sample_rate,
-            min_freq,
-            max_freq,
-            &mut mel_energies,
-        );
-
-        // Normalize into a [0, 1] range so downstream quantization (`* 127.0`) and the QAT
-        // clamp ranges used during training stay meaningful regardless of signal amplitude.
-        let max_e = mel_energies.iter().cloned().fold(1e-6f32, f32::max);
-        for e in &mut mel_energies {
-            *e = (*e / max_e).clamp(0.0, 1.0);
-        }
-        mel_energies
-    }
-
-    /// Real multi-frame DSP pipeline: normalize -> high-pass filter -> sliding window -> per-frame
-    /// Window/FFT/Mel extraction. Every sample yields exactly `num_frames_for_config(dsp)` frames.
     pub fn extract_frame_sequence_with_dsp(dsp: &DspConfig, raw: &[f32]) -> Vec<Vec<f32>> {
-        let capture = dsp.capture_samples.max(dsp.window_size);
-        let normalized = Self::normalize_raw_to_capture_length(raw, capture);
-        let filtered = Self::apply_high_pass_filter(dsp, &normalized);
-
-        let num_frames = Self::num_frames_for_config(dsp);
-        let hop = dsp.frame_hop_size.max(1);
-
-        (0..num_frames)
-            .map(|f| {
-                let start = f * hop;
-                let end = (start + dsp.window_size).min(filtered.len());
-                let mut frame_buf = vec![0.0f32; dsp.window_size];
-                if end > start {
-                    frame_buf[..end - start].copy_from_slice(&filtered[start..end]);
-                }
-                Self::extract_frame_features(dsp, &frame_buf)
-            })
+        let cfg = dsp.to_feature_config();
+        let n_frames = cfg.num_frames();
+        let mut flat = vec![0.0f32; n_frames * cfg.num_mel_bins];
+        let _ = extract_mel_sequence(&cfg, raw, &mut flat);
+        flat.chunks(cfg.num_mel_bins)
+            .map(|frame| frame.to_vec())
             .collect()
+    }
+
+    fn quantize_frame(frame: &[f32]) -> Vec<i8> {
+        let mut out = vec![0i8; frame.len()];
+        quantize_mel_s8(frame, INPUT_FEATURE_SCALE, &mut out);
+        out
     }
 
     fn mean_pool_frames(frames: &[Vec<f32>], num_mel_bins: usize) -> Vec<f32> {
@@ -399,13 +525,6 @@ impl StudioState {
             *p /= frames.len() as f32;
         }
         pooled
-    }
-
-    fn quantize_frame(frame: &[f32]) -> Vec<i8> {
-        frame
-            .iter()
-            .map(|&f| ((f * 127.0).round().clamp(-128.0, 127.0)) as i8)
-            .collect()
     }
 
     /// The HIL playground's flat i8 test vector, per architecture: `DenseMLP`/`RecurrentSVDF`
@@ -443,7 +562,9 @@ impl StudioState {
         }
 
         let arch = self.model_config.arch;
-        if let Some(first) = self.samples.first() {
+        if !self.model_source.is_imported()
+            && let Some(first) = self.samples.first()
+        {
             self.test_input_vector = Self::test_input_vector_for(arch, dsp.num_mel_bins, first);
         }
     }
@@ -460,6 +581,18 @@ impl StudioState {
         self.is_training = false;
         self.train_loss_history.clear();
         self.val_acc_history.clear();
+        if self.model_source.is_imported() {
+            self.weights_fc1.clear();
+            self.bias_fc1.clear();
+            self.weights_fc2.clear();
+            self.bias_fc2.clear();
+            self.conv1d_weights.clear();
+            self.conv1d_bias.clear();
+            self.svdf_weights_feature.clear();
+            self.svdf_weights_time.clear();
+            self.svdf_bias.clear();
+            return;
+        }
 
         let num_inputs = self.dsp.num_mel_bins;
         let num_classes = self.classes.len();
@@ -544,7 +677,7 @@ impl StudioState {
         self.confusion_matrix = vec![vec![0; num_classes]; num_classes];
     }
 
-    /// Run single epoch of training (SGD + Backpropagation + QAT simulation)
+    /// Runs one epoch of the educational float SGD trainer.
     pub fn step_training_epoch(&mut self) {
         if self.samples.is_empty() {
             return;
@@ -591,7 +724,7 @@ impl StudioState {
             for i in 0..num_inputs {
                 sum += x[i] * self.weights_fc1[h * num_inputs + i];
             }
-            // Simulated QAT clamp / ReLU
+            // Demo trainer's bounded ReLU.
             hidden[h] = sum.max(0.0).min(1.0);
         }
 
@@ -962,6 +1095,50 @@ impl StudioState {
         }
     }
 
+    /// Host Burn trainer: float Adam then PTQ, or fake-quant QAT then PTQ. DenseMLP only.
+    pub fn run_burn_training(&mut self, qat: bool) {
+        if self.model_source.is_imported() || self.model_config.arch != ModelArchitecture::DenseMLP
+        {
+            return;
+        }
+        let num_inputs = self.dsp.num_mel_bins;
+        let mut features = Vec::new();
+        let mut labels = Vec::new();
+        for sample in &self.samples {
+            if let Some(idx) = self.classes.iter().position(|c| c == &sample.label) {
+                features.push(Self::mean_pool_frames(&sample.frames, num_inputs));
+                labels.push(idx);
+            }
+        }
+        if features.is_empty() {
+            return;
+        }
+        let report = embedded_nn_train::train_dense_mlp(
+            &features,
+            &labels,
+            &embedded_nn_train::TrainConfig {
+                num_inputs,
+                hidden: self.model_config.hidden_units,
+                num_classes: self.classes.len(),
+                learning_rate: f64::from(self.model_config.learning_rate),
+                epochs: self.model_config.epochs.max(1),
+                mode: if qat {
+                    embedded_nn_train::TrainMode::Qat
+                } else {
+                    embedded_nn_train::TrainMode::Ptq
+                },
+            },
+        );
+        self.weights_fc1 = report.weights_fc1;
+        self.bias_fc1 = report.bias_fc1;
+        self.weights_fc2 = report.weights_fc2;
+        self.bias_fc2 = report.bias_fc2;
+        self.train_loss_history.push(report.final_loss);
+        self.current_epoch = self.model_config.epochs;
+        self.is_training = false;
+        self.rebuild_model_graph_and_codegen();
+    }
+
     /// Quantizes `weights` per the currently selected [`QuantizationMode`], returning (s8, s4)
     fn quantize_head_weights(&self, weights: &[f32]) -> (Vec<i8>, Option<Vec<i8>>, f32) {
         let max_w = weights.iter().map(|w| w.abs()).fold(0.1f32, f32::max);
@@ -1017,7 +1194,7 @@ impl StudioState {
     /// sample set through the current architecture's forward math (no gradient) and returns the
     /// (min, max) float range of the final pre-softmax logits, and -- for RecurrentSVDF only --
     /// the SVDF layer's raw output. Both are unclamped, unlike the ReLU-clamped hidden/conv
-    /// layers, which use the fixed simulated QAT range `[0, 1]` instead and don't need scanning.
+    /// layers, which use the demo trainer's fixed `[0, 1]` range and don't need scanning.
     fn calibrate_activation_ranges(&self) -> ((f32, f32), Option<(f32, f32)>) {
         let num_inputs = self.dsp.num_mel_bins;
         let expected_frames = Self::num_frames_for_config(&self.dsp);
@@ -1072,6 +1249,10 @@ impl StudioState {
 
     /// Rebuilds the formal ModelGraph, schedules the static memory arena, and emits Rust code
     pub fn rebuild_model_graph_and_codegen(&mut self) {
+        if self.model_source.is_imported() {
+            self.refresh_graph_artifacts();
+            return;
+        }
         let num_inputs = self.dsp.num_mel_bins;
         let num_classes = self.classes.len();
 
@@ -1092,7 +1273,7 @@ impl StudioState {
         // Real activation-range calibration (asymmetric quantization): scans the dataset through
         // the current architecture's forward math to find the true float range of unclamped
         // layers (logits, and the SVDF output), rather than the fake QuantParams::default()
-        // placeholder used before. ReLU-clamped layers use the fixed [0, 1] QAT range directly.
+        // placeholder used before. ReLU-clamped layers use the fixed [0, 1] demo range directly.
         let (logits_range, svdf_range) = self.calibrate_activation_ranges();
         let hidden_range = (0.0f32, 1.0f32);
 
@@ -1291,16 +1472,8 @@ impl StudioState {
         builder.mark_output(softmax_id);
 
         let graph = builder.build();
-        let plan = ArenaScheduler::schedule(&graph);
-
-        let codegen = RustCodeGenerator::new("GestureNeuralNet");
-        let generated_code = codegen.generate(&graph);
-
         self.compiled_graph = Some(graph);
-        self.arena_plan = Some(plan);
-        self.generated_rust_code = generated_code;
-
-        self.run_test_inference();
+        self.refresh_graph_artifacts();
     }
 
     /// Unflattens a flat i8 test vector into `num_frames` frames of `num_mel_bins` f32 values.
@@ -1322,6 +1495,71 @@ impl StudioState {
 
     /// Evaluates current test vector through forward pass
     pub fn run_test_inference(&mut self) {
+        if self.model_source.is_imported() {
+            let Some(graph) = self.compiled_graph.as_ref() else {
+                return;
+            };
+            let output_quant = graph
+                .outputs
+                .first()
+                .and_then(|id| graph.tensors.iter().find(|tensor| tensor.id == *id))
+                .map(|tensor| tensor.quant.clone());
+            let mut interpreter = match HostInterpreter::new(graph) {
+                Ok(interpreter) => interpreter,
+                Err(error) => {
+                    self.model_import_status = ModelImportStatus::Error(error.to_string());
+                    return;
+                }
+            };
+            let mut input_refs: Vec<&[i8]> =
+                Vec::with_capacity(1 + self.test_additional_input_vectors.len());
+            input_refs.push(&self.test_input_vector);
+            input_refs.extend(self.test_additional_input_vectors.iter().map(Vec::as_slice));
+            match interpreter.run(&input_refs) {
+                Ok(outputs) => {
+                    self.test_output_logits = outputs.first().cloned().unwrap_or_default();
+                    if let Some(quant) = output_quant {
+                        let dequantized: Vec<f32> = self
+                            .test_output_logits
+                            .iter()
+                            .map(|&value| (value as i32 - quant.zero_point) as f32 * quant.scale)
+                            .collect();
+                        let output_is_softmax = graph
+                            .layers
+                            .last()
+                            .is_some_and(|layer| matches!(layer.op, OpPayload::Softmax));
+                        self.test_probabilities = if output_is_softmax {
+                            let values: Vec<f32> =
+                                dequantized.iter().map(|value| value.max(0.0)).collect();
+                            let sum: f32 = values.iter().sum();
+                            if sum > 0.0 {
+                                values.into_iter().map(|value| value / sum).collect()
+                            } else {
+                                vec![0.0; dequantized.len()]
+                            }
+                        } else {
+                            let max = dequantized
+                                .iter()
+                                .copied()
+                                .fold(f32::NEG_INFINITY, f32::max);
+                            let exponentials: Vec<f32> = dequantized
+                                .iter()
+                                .map(|value| (value - max).exp())
+                                .collect();
+                            let sum: f32 = exponentials.iter().sum();
+                            exponentials.into_iter().map(|value| value / sum).collect()
+                        };
+                    }
+                    self.model_import_status =
+                        ModelImportStatus::Imported(self.model_source.display_name());
+                }
+                Err(error) => {
+                    self.model_import_status = ModelImportStatus::Error(error.to_string());
+                }
+            }
+            return;
+        }
+
         let num_inputs = self.dsp.num_mel_bins;
 
         let logits = match self.model_config.arch {
@@ -1361,6 +1599,79 @@ impl StudioState {
             .iter()
             .map(|&l| ((l * 20.0).round().clamp(-128.0, 127.0)) as i8)
             .collect();
+    }
+
+    pub fn export_model_bundle(&self, model_rs_path: &Path) -> Result<String, String> {
+        std::fs::write(model_rs_path, &self.generated_rust_code)
+            .map_err(|error| format!("Export failed: {error}"))?;
+        let sidecar = model_rs_path.with_file_name("dsp_contract.json");
+        let json = serde_json::to_string_pretty(&self.dsp.to_contract())
+            .map_err(|error| format!("DSP contract serialize failed: {error}"))?;
+        std::fs::write(&sidecar, json)
+            .map_err(|error| format!("DSP contract export failed: {error}"))?;
+        Ok(format!(
+            "Saved {} and {}",
+            model_rs_path.display(),
+            sidecar.display()
+        ))
+    }
+
+    pub fn compare_imported_tflite_golden(&mut self) {
+        let path = match &self.model_source {
+            ModelSource::ImportedTflite(path) => path.clone(),
+            _ => {
+                self.golden_status =
+                    Some("Import a TensorFlow Lite model to run the golden check.".into());
+                return;
+            }
+        };
+        let graph = match std::fs::read(&path)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| {
+                embedded_nn_tflite::import_tflite(&bytes).map_err(|error| error.to_string())
+            }) {
+            Ok(graph) => graph,
+            Err(error) => {
+                self.golden_status = Some(format!("Golden re-import failed: {error}"));
+                return;
+            }
+        };
+        let mut interpreter = match HostInterpreter::new(&graph) {
+            Ok(interpreter) => interpreter,
+            Err(error) => {
+                self.golden_status = Some(format!("Golden interpreter failed: {error}"));
+                return;
+            }
+        };
+        let mut input_refs: Vec<&[i8]> =
+            Vec::with_capacity(1 + self.test_additional_input_vectors.len());
+        input_refs.push(&self.test_input_vector);
+        input_refs.extend(self.test_additional_input_vectors.iter().map(Vec::as_slice));
+        match interpreter.run(&input_refs) {
+            Ok(outputs) => {
+                self.run_test_inference();
+                let fresh = outputs.first().cloned().unwrap_or_default();
+                if fresh == self.test_output_logits {
+                    self.golden_status = Some(format!(
+                        "Pass: re-imported TFLite host interpreter matches playground ({} logits).",
+                        fresh.len()
+                    ));
+                } else {
+                    self.golden_status = Some(format!(
+                        "Mismatch: golden {fresh:?} vs playground {:?}",
+                        self.test_output_logits
+                    ));
+                }
+            }
+            Err(error) => {
+                self.golden_status = Some(format!("Golden run failed: {error}"));
+            }
+        }
+    }
+
+    pub fn apply_device_inference(&mut self, cycles: u32, logits: &[u8]) {
+        self.last_device_cycles = Some(cycles);
+        self.last_device_logits = logits.iter().map(|&value| value as i8).collect();
     }
 }
 
@@ -1409,7 +1720,6 @@ mod tests {
         for mode in [
             QuantizationMode::Int4SubByte,
             QuantizationMode::Int8FixedPoint,
-            QuantizationMode::Int16HighPrecision,
         ] {
             let mut state = StudioState::default();
             state.model_config.quant_mode = mode;
@@ -1541,5 +1851,93 @@ mod tests {
         assert!(logits_range.0.is_finite() && logits_range.1.is_finite());
         assert!(logits_range.1 > logits_range.0);
         assert!(svdf_range.is_none()); // default arch is DenseMLP
+    }
+
+    #[test]
+    fn imported_json_source_persists_and_demo_rebuild_cannot_overwrite_graph() {
+        let demo = StudioState::default();
+        let imported_graph = demo.compiled_graph.clone().unwrap();
+        let expected = imported_graph.clone();
+        let path = std::env::temp_dir().join("embedded_nn_studio_model_graph.json");
+        std::fs::write(&path, serde_json::to_string(&imported_graph).unwrap()).unwrap();
+
+        let mut state = StudioState::default();
+        state.import_json_path(&path).unwrap();
+        assert_eq!(state.model_source, ModelSource::ImportedJson(path.clone()));
+        assert!(state.production_export_eligible());
+        assert!(
+            state.weights_fc1.is_empty(),
+            "demo SGD state must be cleared"
+        );
+        let imported_input = state.test_input_vector.clone();
+
+        state.dsp.num_mel_bins = 32;
+        state.model_config.hidden_units = 8;
+        state.recompute_all_frames();
+        state.reset_training();
+        state.rebuild_model_graph_and_codegen();
+        assert_eq!(state.compiled_graph.as_ref(), Some(&expected));
+        assert_eq!(state.model_source, ModelSource::ImportedJson(path.clone()));
+        assert_eq!(state.test_input_vector, imported_input);
+        assert!(state.weights_fc1.is_empty());
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn tflite_import_sets_source_and_production_export_eligibility() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../embedded-nn-tflite/fixtures/constructed/sine_fc_int8.tflite");
+        let mut state = StudioState::default();
+        state.import_tflite_path(&fixture).unwrap();
+
+        assert_eq!(
+            state.model_source,
+            ModelSource::ImportedTflite(fixture.clone())
+        );
+        assert!(state.production_export_eligible());
+        assert!(state.export_enabled());
+        assert_eq!(state.test_input_vector.len(), 1);
+        assert_eq!(state.test_output_logits.len(), 1);
+
+        let graph = state.compiled_graph.clone();
+        state.recompute_all_frames();
+        state.rebuild_model_graph_and_codegen();
+        assert_eq!(state.model_source, ModelSource::ImportedTflite(fixture));
+        assert_eq!(state.compiled_graph, graph);
+    }
+
+    #[test]
+    fn demo_export_requires_explicit_warning_opt_in() {
+        let mut state = StudioState::default();
+        assert_eq!(state.model_source, ModelSource::DemoTrainer);
+        assert!(!state.production_export_eligible());
+        assert!(!state.export_enabled());
+
+        state.allow_demo_export = true;
+        assert!(state.export_enabled());
+        assert!(!state.production_export_eligible());
+    }
+
+    #[test]
+    fn dsp_contract_carries_versioned_window_and_input_scale() {
+        let state = StudioState::default();
+        let contract = state.dsp.to_contract();
+        assert_eq!(contract.version, DspContract::VERSION);
+        assert_eq!(contract.window_type, "hann");
+        assert_eq!(contract.window_size, 64);
+        assert_eq!(contract.input_zero_point, 0);
+    }
+
+    #[test]
+    fn tflite_golden_check_passes_on_sine_fixture() {
+        let mut state = StudioState::default();
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/embedded-nn-tflite/fixtures/constructed/sine_fc_int8.tflite");
+        state.import_tflite_path(&path).expect("import sine fixture");
+        state.test_input_vector = vec![64];
+        state.compare_imported_tflite_golden();
+        let status = state.golden_status.expect("status");
+        assert!(status.starts_with("Pass:"), "{status}");
     }
 }

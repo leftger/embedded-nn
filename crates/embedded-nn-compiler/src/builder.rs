@@ -36,6 +36,10 @@ impl ModelBuilder {
         id
     }
 
+    pub fn tensor_desc(&self, id: usize) -> Option<&TensorDesc> {
+        self.graph.tensors.iter().find(|t| t.id == id)
+    }
+
     pub fn add_dense_layer(
         &mut self,
         name: impl Into<String>,
@@ -569,6 +573,111 @@ impl ModelBuilder {
             op: OpPayload::Reshape { new_shape },
         });
 
+        out_id
+    }
+
+    pub fn add_pad_layer(
+        &mut self,
+        name: impl Into<String>,
+        input_id: usize,
+        padding: Padding2D,
+        pad_value: i8,
+    ) -> usize {
+        let input_tensor = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == input_id)
+            .expect("Input tensor not found");
+        let out_id = self.next_tensor_id;
+        self.next_tensor_id += 1;
+        let layer_name = name.into();
+        let shape = TensorShape::new_4d(
+            input_tensor.shape.batches,
+            input_tensor.shape.height + padding.top + padding.bottom,
+            input_tensor.shape.width + padding.left + padding.right,
+            input_tensor.shape.channels,
+        );
+        self.graph.tensors.push(TensorDesc {
+            id: out_id,
+            name: format!("{}_out", layer_name),
+            shape,
+            dtype: input_tensor.dtype,
+            quant: input_tensor.quant.clone(),
+        });
+        let layer_id = self.next_layer_id;
+        self.next_layer_id += 1;
+        self.graph.layers.push(LayerNode {
+            id: layer_id,
+            name: layer_name,
+            inputs: vec![input_id],
+            outputs: vec![out_id],
+            op: OpPayload::Pad {
+                padding,
+                pad_value,
+            },
+        });
+        out_id
+    }
+
+    pub fn add_mean_layer(
+        &mut self,
+        name: impl Into<String>,
+        input_id: usize,
+        reduce_height: bool,
+        reduce_width: bool,
+        reduce_channels: bool,
+        keep_dims: bool,
+    ) -> usize {
+        let input_tensor = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == input_id)
+            .expect("Input tensor not found");
+        let mut h = input_tensor.shape.height;
+        let mut w = input_tensor.shape.width;
+        let mut c = input_tensor.shape.channels;
+        if reduce_height {
+            h = 1;
+        }
+        if reduce_width {
+            w = 1;
+        }
+        if reduce_channels {
+            c = 1;
+        }
+        let shape = if keep_dims {
+            TensorShape::new_4d(input_tensor.shape.batches, h, w, c)
+        } else if reduce_height && reduce_width && !reduce_channels {
+            TensorShape::new_1d(input_tensor.shape.channels)
+        } else {
+            TensorShape::new_4d(input_tensor.shape.batches, h, w, c)
+        };
+        let out_id = self.next_tensor_id;
+        self.next_tensor_id += 1;
+        let layer_name = name.into();
+        self.graph.tensors.push(TensorDesc {
+            id: out_id,
+            name: format!("{}_out", layer_name),
+            shape,
+            dtype: input_tensor.dtype,
+            quant: input_tensor.quant.clone(),
+        });
+        let layer_id = self.next_layer_id;
+        self.next_layer_id += 1;
+        self.graph.layers.push(LayerNode {
+            id: layer_id,
+            name: layer_name,
+            inputs: vec![input_id],
+            outputs: vec![out_id],
+            op: OpPayload::Mean {
+                reduce_height,
+                reduce_width,
+                reduce_channels,
+                keep_dims,
+            },
+        });
         out_id
     }
 

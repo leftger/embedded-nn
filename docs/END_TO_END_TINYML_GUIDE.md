@@ -41,24 +41,11 @@ flowchart LR
 Collecting high-quality real-world sensor data (IMU accelerometers, gyroscopes, audio microphones, PPG heart rate, environmental sensors) is the foundation of any TinyML project.
 
 ### Target Firmware Telemetry (MCU Side)
-Stream sensor readings over USB CDC or bulk endpoints using the `embedded-nn-live` protocol:
 
-```rust
-use embedded_nn_live::protocol::{LiveMessage, SensorFrame};
+Stream packed `f32` samples with `Msg::SensorFrame` over vendor USB bulk using
+[`embedded-nn-live`](LIVE_PROTOCOL.md). Do not send JSON over CDC.
 
-// Inside your sensor read interrupt / timer loop (e.g. 100 Hz)
-fn stream_sensor_sample(accel_x: f32, accel_y: f32, accel_z: f32, timestamp: u32) {
-    let frame = SensorFrame {
-        timestamp_ms: timestamp,
-        channel_count: 3,
-        values: vec![accel_x, accel_y, accel_z],
-    };
-    let msg = LiveMessage::SensorData(frame);
-    // Transmit over UART / USB CDC / nusb bulk endpoint
-    let json = msg.encode_json().unwrap();
-    usb_serial_write(json.as_bytes());
-}
-```
+Studio Ingest: **Refresh USB** then **Connect** to a `1209:e612` agent. Codegen: **Run on device**.
 
 ### Studio Recording & Annotation
 1. Launch **`embedded-nn-studio`**:
@@ -66,7 +53,7 @@ fn stream_sensor_sample(accel_x: f32, accel_y: f32, accel_z: f32, timestamp: u32
    cargo run -p embedded-nn-studio
    ```
 2. Navigate to **Tab 1: Ingest & Sensors**.
-3. Select your device port (e.g., `USB-CDC (ACM0)`).
+3. Select a USB-HS agent (or Simulated IMU Source).
 4. Set the sample label (e.g., `gesture_swipe_left`, `gesture_tap`, `vibration_fault`).
 5. Click **⏺ Record Sample** to capture labeled time-series frames directly into your training dataset.
 
@@ -167,6 +154,48 @@ SRAM Arena Peak Footprint: 192 Bytes total (instead of 336 Bytes naive sum)
 The compiler computes:
 - **Lifetime Start & End** for every intermediate activation tensor.
 - **Physical Byte Offset** within a single static buffer `[u8; ARENA_SIZE]`.
+
+### Silicon Profiling: Total vs. Available SRAM
+
+Studio's **Arena** tab checks the planned arena against a selected target. Physical SRAM is not
+the same as SRAM your model can use, so the profiler reports the split explicitly:
+
+```text
+SRAM total  -  radio/stack reserve  =  available to the arena
+```
+
+The arena's pass/fail verdict and utilization gauge are always computed against the **available**
+figure, never the total. Targets that carry no protocol stack in their profile reserve `0 KB`, so
+available equals total for them.
+
+| Target | Core | Clock | Flash | SRAM (total) | Default stack reserve | Rust target |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| STM32F401RE | Cortex-M4F | 84 MHz | 512 KB | 64 KB | 0 KB | `thumbv7em-none-eabihf` |
+| nRF52840 | Cortex-M4F | 64 MHz | 1024 KB | 256 KB | 0 KB | `thumbv7em-none-eabihf` |
+| RP2040 | Dual Cortex-M0+ | 133 MHz | 2048 KB | 264 KB | 0 KB | `thumbv6m-none-eabi` |
+| RP2350 | Dual Cortex-M33 | 150 MHz | 4096 KB | 520 KB | 0 KB | `thumbv8m.main-none-eabihf` |
+| ESP32-S3 | Dual Xtensa LX7 | 240 MHz | 8192 KB | 512 KB | 0 KB | `xtensa-esp32s3-none-elf` |
+| **STM32WBA65RI** | Cortex-M33 (FPU + DSP) | 100 MHz | 2048 KB | 512 KB | **192 KB (editable)** | `thumbv8m.main-none-eabihf` |
+
+For the STM32WBA65RI, the reserve is editable because the amount of SRAM a BLE controller/host
+and its buffers consume depends on how the stack is configured. The 192 KB default is a
+mid-range starting point, not a datasheet constant — set it to your firmware's actual linker
+budget. Studio keeps the value per target, so switching targets and returning preserves your
+edit. With the default, the arena is judged against 320 KB available out of 512 KB total.
+
+### `+dsp` on the STM32WBA65RI
+
+The WBA65RI's Cortex-M33 implements the Armv8-M DSP extension, and the reference firmware in
+[`examples/stm32wba65ri`](../examples/stm32wba65ri) builds for `thumbv8m.main-none-eabihf` with
+`-C target-feature=+dsp`. Stable Rust accepts the flag but emits:
+
+```text
+warning: unstable feature specified for `-Ctarget-feature`: `dsp`
+         this feature is not stably supported; its behavior can change in the future
+```
+
+The warning is expected. The generated kernels are portable and build correctly without the
+flag; enabling it only lets DSP-accelerated implementations be selected where available.
 
 ---
 
