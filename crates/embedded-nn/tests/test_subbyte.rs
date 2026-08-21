@@ -1,5 +1,5 @@
 use embedded_nn::{
-    Activation, ConvParams, Dims, FcParams, PerTensorQuantParams, Tile,
+    Activation, ConvParams, Dims, FcParams, Padding2D, PerTensorQuantParams, Tile,
     subbyte::{convolve_s4, fully_connected_s4, pack_s4_pair, unpack_s4_pair},
 };
 
@@ -72,7 +72,7 @@ fn test_convolve_s4_variations() {
         input_offset: 0,
         output_offset: 0,
         stride: Tile::new(1, 1),
-        padding: Tile::new(0, 0),
+        padding: Padding2D::symmetric(0, 0),
         dilation: Tile::new(1, 1),
         activation: Activation::int8_unconstrained(),
     };

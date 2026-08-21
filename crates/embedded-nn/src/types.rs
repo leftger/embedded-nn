@@ -65,6 +65,36 @@ impl Tile {
     }
 }
 
+/// Explicit spatial padding for 2D operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Padding2D {
+    /// Padding before the first input row.
+    pub top: i32,
+    /// Padding after the last input row.
+    pub bottom: i32,
+    /// Padding before the first input column.
+    pub left: i32,
+    /// Padding after the last input column.
+    pub right: i32,
+}
+
+impl Padding2D {
+    /// Creates explicit top, bottom, left, and right padding.
+    pub const fn new(top: i32, bottom: i32, left: i32, right: i32) -> Self {
+        Self {
+            top,
+            bottom,
+            left,
+            right,
+        }
+    }
+
+    /// Creates symmetric padding from width and height amounts.
+    pub const fn symmetric(width: i32, height: i32) -> Self {
+        Self::new(height, height, width, width)
+    }
+}
+
 /// Quantized activation clamping range (min, max).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Activation {
@@ -270,8 +300,8 @@ pub struct ConvParams {
     pub output_offset: i32,
     /// Stride (width, height).
     pub stride: Tile,
-    /// Padding (width, height).
-    pub padding: Tile,
+    /// Explicit spatial padding.
+    pub padding: Padding2D,
     /// Dilation (width, height).
     pub dilation: Tile,
     /// Output activation range.
@@ -289,8 +319,8 @@ pub struct DwConvParams {
     pub ch_mult: i32,
     /// Stride (width, height).
     pub stride: Tile,
-    /// Padding (width, height).
-    pub padding: Tile,
+    /// Explicit spatial padding.
+    pub padding: Padding2D,
     /// Dilation (width, height).
     pub dilation: Tile,
     /// Output activation range.
@@ -315,8 +345,8 @@ pub struct FcParams {
 pub struct PoolParams {
     /// Stride (width, height).
     pub stride: Tile,
-    /// Padding (width, height).
-    pub padding: Tile,
+    /// Explicit spatial padding.
+    pub padding: Padding2D,
     /// Output activation range.
     pub activation: Activation,
 }

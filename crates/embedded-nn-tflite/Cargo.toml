@@ -8,6 +8,9 @@ repository.workspace = true
 description = "TensorFlow Lite (.tflite) FlatBuffers importer for embedded-nn"
 include = ["/src/**", "/schema/**", "/tests/**", "/fixtures/**", "/Cargo.toml"]
 
+[features]
+fixture-generation = []
+
 [dependencies]
 embedded-nn-compiler = { workspace = true }
 flatbuffers = { workspace = true }
@@ -15,3 +18,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 embedded-nn-codegen = { workspace = true }
+
+[[example]]
+name = "generate_constructed_fixtures"
+required-features = ["fixture-generation"]

@@ -1,5 +1,5 @@
 use embedded_nn::{
-    Activation, Dims, PoolParams, Tile,
+    Activation, Dims, Padding2D, PoolParams, Tile,
     pooling::{avg_pool_s8, avg_pool_s16, max_pool_s8, max_pool_s16},
 };
 
@@ -7,7 +7,7 @@ use embedded_nn::{
 fn test_max_pool_s8_variations() {
     let pool_params = PoolParams {
         stride: Tile::new(2, 2),
-        padding: Tile::new(0, 0),
+        padding: Padding2D::symmetric(0, 0),
         activation: Activation::new(-10, 10),
     };
     let filter_dims = Tile::new(2, 2);
@@ -38,10 +38,33 @@ fn test_max_pool_s8_variations() {
 }
 
 #[test]
+fn test_max_pool_s8_odd_asymmetric_same_padding() {
+    let params = PoolParams {
+        stride: Tile::new(2, 2),
+        padding: Padding2D::new(0, 1, 0, 1),
+        activation: Activation::int8_unconstrained(),
+    };
+    let input: [i8; 16] = core::array::from_fn(|i| (i + 1) as i8);
+    let mut output = [0; 4];
+
+    max_pool_s8(
+        &params,
+        &Tile::new(3, 3),
+        &Dims::new(1, 4, 4, 1),
+        &input,
+        &Dims::new(1, 2, 2, 1),
+        &mut output,
+    )
+    .unwrap();
+
+    assert_eq!(output, [11, 12, 15, 16]);
+}
+
+#[test]
 fn test_avg_pool_s8_negative_values_and_padding() {
     let pool_params = PoolParams {
         stride: Tile::new(1, 1),
-        padding: Tile::new(1, 1),
+        padding: Padding2D::symmetric(1, 1),
         activation: Activation::int8_unconstrained(),
     };
     let filter_dims = Tile::new(3, 3);
@@ -70,7 +93,7 @@ fn test_avg_pool_s8_negative_values_and_padding() {
 fn test_max_pool_s16_multi_channel() {
     let pool_params = PoolParams {
         stride: Tile::new(1, 1),
-        padding: Tile::new(0, 0),
+        padding: Padding2D::symmetric(0, 0),
         activation: Activation::int16_unconstrained(),
     };
     let filter_dims = Tile::new(2, 2);
@@ -104,7 +127,7 @@ fn test_max_pool_s16_multi_channel() {
 fn test_avg_pool_s16_large_sums() {
     let pool_params = PoolParams {
         stride: Tile::new(2, 2),
-        padding: Tile::new(0, 0),
+        padding: Padding2D::symmetric(0, 0),
         activation: Activation::int16_unconstrained(),
     };
     let filter_dims = Tile::new(2, 2);

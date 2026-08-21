@@ -1,6 +1,6 @@
 use embedded_nn::{
-    Activation, ConvParams, Dims, DwConvParams, Error, PerChannelQuantParams, PerTensorQuantParams,
-    Tile,
+    Activation, ConvParams, Dims, DwConvParams, Error, Padding2D, PerChannelQuantParams,
+    PerTensorQuantParams, Tile,
     convolution::{
         convolve_1_x_n_s8, convolve_per_channel_s8, convolve_s8, depthwise_conv_per_channel_s8,
         transpose_conv_s8,
@@ -15,7 +15,7 @@ fn test_convolve_s8_standard_per_tensor_variations() {
         input_offset: 128,
         output_offset: -128,
         stride: Tile::new(1, 1),
-        padding: Tile::new(0, 0),
+        padding: Padding2D::symmetric(0, 0),
         dilation: Tile::new(1, 1),
         activation: Activation::int8_unconstrained(),
     };
@@ -56,7 +56,7 @@ fn test_convolve_s8_stride_padding_dilation() {
         input_offset: 0,
         output_offset: 0,
         stride: Tile::new(2, 2),
-        padding: Tile::new(1, 1),
+        padding: Padding2D::symmetric(1, 1),
         dilation: Tile::new(1, 1),
         activation: Activation::new(0, 100),
     };
@@ -89,12 +89,42 @@ fn test_convolve_s8_stride_padding_dilation() {
 }
 
 #[test]
+fn test_convolve_s8_odd_asymmetric_same_padding() {
+    let conv_params = ConvParams {
+        input_offset: 0,
+        output_offset: 0,
+        stride: Tile::new(2, 2),
+        // TFLite SAME for input=4, kernel=3, stride=2 has one trailing pad cell.
+        padding: Padding2D::new(0, 1, 0, 1),
+        dilation: Tile::new(1, 1),
+        activation: Activation::int8_unconstrained(),
+    };
+    let input: [i8; 16] = core::array::from_fn(|i| (i + 1) as i8);
+    let mut output = [0; 4];
+
+    convolve_s8(
+        &conv_params,
+        &PerTensorQuantParams::new(i32::MAX, 0),
+        &Dims::new(1, 4, 4, 1),
+        &input,
+        &Dims::new(1, 3, 3, 1),
+        &[1; 9],
+        None,
+        &Dims::new(1, 2, 2, 1),
+        &mut output,
+    )
+    .unwrap();
+
+    assert_eq!(output, [54, 45, 72, 54]);
+}
+
+#[test]
 fn test_convolve_s8_multi_batch_multi_channel() {
     let conv_params = ConvParams {
         input_offset: 0,
         output_offset: 0,
         stride: Tile::new(1, 1),
-        padding: Tile::new(0, 0),
+        padding: Padding2D::symmetric(0, 0),
         dilation: Tile::new(1, 1),
         activation: Activation::int8_unconstrained(),
     };
@@ -137,7 +167,7 @@ fn test_convolve_per_channel_s8_comprehensive() {
         input_offset: 0,
         output_offset: 0,
         stride: Tile::new(1, 1),
-        padding: Tile::new(0, 0),
+        padding: Padding2D::symmetric(0, 0),
         dilation: Tile::new(1, 1),
         activation: Activation::int8_unconstrained(),
     };
@@ -179,7 +209,7 @@ fn test_depthwise_conv_per_channel_s8_execution() {
         output_offset: 0,
         ch_mult: 1,
         stride: Tile::new(1, 1),
-        padding: Tile::new(0, 0),
+        padding: Padding2D::symmetric(0, 0),
         dilation: Tile::new(1, 1),
         activation: Activation::int8_unconstrained(),
     };
@@ -220,7 +250,7 @@ fn test_convolve_1_x_n_s8_temporal() {
         input_offset: 0,
         output_offset: 0,
         stride: Tile::new(1, 1),
-        padding: Tile::new(0, 0),
+        padding: Padding2D::symmetric(0, 0),
         dilation: Tile::new(1, 1),
         activation: Activation::int8_unconstrained(),
     };
@@ -256,7 +286,7 @@ fn test_transpose_conv_s8_execution() {
         input_offset: 0,
         output_offset: 0,
         stride: Tile::new(2, 2),
-        padding: Tile::new(0, 0),
+        padding: Padding2D::symmetric(0, 0),
         dilation: Tile::new(1, 1),
         activation: Activation::int8_unconstrained(),
     };
@@ -302,7 +332,7 @@ fn test_convolve_f32_execution() {
 
     convolve_f32(
         Tile::new(1, 1),
-        Tile::new(0, 0),
+        Padding2D::default(),
         Tile::new(1, 1),
         &input_dims,
         &input,
@@ -324,7 +354,7 @@ fn test_convolve_s8_error_paths() {
         input_offset: 0,
         output_offset: 0,
         stride: Tile::new(1, 1),
-        padding: Tile::new(0, 0),
+        padding: Padding2D::symmetric(0, 0),
         dilation: Tile::new(1, 1),
         activation: Activation::int8_unconstrained(),
     };

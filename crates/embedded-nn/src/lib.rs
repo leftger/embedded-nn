@@ -69,10 +69,11 @@ pub use support::{
 };
 pub use types::{
     Activation, Context, ConvParams, Dims, DwConvParams, Error, FcParams, FusedActivation,
-    PerChannelQuantParams, PerTensorQuantParams, PoolParams, QuantParams, Result, SoftmaxParams,
-    TensorView, TensorViewPadding, Tile,
+    Padding2D, PerChannelQuantParams, PerTensorQuantParams, PoolParams, QuantParams, Result,
+    SoftmaxParams, TensorView, TensorViewPadding, Tile,
 };
 
+pub use basic_math::{ElementwiseAddParams, elementwise_add_s8};
 pub use convolution::{
     convolve_1_x_n_s8, convolve_per_channel_s8, convolve_s8, depthwise_conv_per_channel_s8,
     transpose_conv_s8,
@@ -86,3 +87,4 @@ pub use recurrent::{LstmGateParams, lstm_step_s8_s16, lstm_step_s16, svdf_s8, sv
 pub use simd::{vec_dot_s8, vec_dot_s16};
 pub use softmax::softmax_s8;
 pub use subbyte::{convolve_s4, fully_connected_s4, pack_s4_pair, unpack_s4_pair};
+pub use transpose::{transpose_2d_s8, transpose_spatial_s8};

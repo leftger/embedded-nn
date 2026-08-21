@@ -1,0 +1,19 @@
+[package]
+name = "embedded-nn-qemu-lm3s6965"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7.5"
+cortex-m-semihosting = "0.6.0"
+embedded-nn = { path = "../../crates/embedded-nn", default-features = false, features = ["libm"] }
+embedded-nn-macros = { path = "../../crates/embedded-nn-macros" }
+panic-semihosting = "0.7.0"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

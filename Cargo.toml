@@ -10,6 +10,10 @@ members = [
     "crates/embedded-nn-studio",
     "crates/embedded-nn-tflite",
 ]
+exclude = [
+    "examples/qemu-lm3s6965",
+    "examples/stm32wba65ri",
+]
 
 [workspace.package]
 version = "0.2.0"

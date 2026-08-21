@@ -106,9 +106,9 @@ pub fn convolve_s4(
 
     for b in 0..input_batches {
         for out_y in 0..output_h {
-            let base_y = out_y as i32 * conv_params.stride.h - conv_params.padding.h;
+            let base_y = out_y as i32 * conv_params.stride.h - conv_params.padding.top;
             for out_x in 0..output_w {
-                let base_x = out_x as i32 * conv_params.stride.w - conv_params.padding.w;
+                let base_x = out_x as i32 * conv_params.stride.w - conv_params.padding.left;
 
                 for out_c in 0..output_c {
                     let mut acc: i32 = match bias {

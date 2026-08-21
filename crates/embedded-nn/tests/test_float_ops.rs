@@ -4,7 +4,7 @@
     clippy::identity_op
 )]
 use embedded_nn::{
-    Dims, Tile,
+    Dims, Padding2D, Tile,
     float_ops::{
         convolve_f32, f16_to_f32, f32_to_f16, fully_connected_f32, relu_f32, relu6_f32, softmax_f32,
     },
@@ -74,7 +74,7 @@ fn test_convolve_f32_multi_channel_bias_stride() {
 
     convolve_f32(
         Tile::new(2, 2),
-        Tile::new(0, 0),
+        Padding2D::default(),
         Tile::new(1, 1),
         &input_dims,
         &input,

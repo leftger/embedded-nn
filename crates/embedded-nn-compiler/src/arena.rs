@@ -225,4 +225,67 @@ mod tests {
         // t0 and t2 do not overlap in lifetime! So t2 can reuse t0's or t1's offset
         assert!(plan.total_arena_bytes < 64 * 4); // Peak memory should be much smaller than naive sum
     }
+
+    #[test]
+    fn binary_inputs_and_output_do_not_alias_at_execution_step() {
+        let mut graph = ModelGraph::new("binary_lifetimes");
+        graph.tensors = (0..4)
+            .map(|id| TensorDesc {
+                id,
+                name: format!("t{id}"),
+                shape: TensorShape::new_1d(16),
+                dtype: DataType::Int8,
+                quant: QuantParams::default(),
+            })
+            .collect();
+        graph.inputs = vec![0];
+        graph.outputs = vec![3];
+        graph.layers = vec![
+            LayerNode {
+                id: 0,
+                name: "left".into(),
+                inputs: vec![0],
+                outputs: vec![1],
+                op: OpPayload::Softmax,
+            },
+            LayerNode {
+                id: 1,
+                name: "right".into(),
+                inputs: vec![0],
+                outputs: vec![2],
+                op: OpPayload::Softmax,
+            },
+            LayerNode {
+                id: 2,
+                name: "add".into(),
+                inputs: vec![1, 2],
+                outputs: vec![3],
+                op: OpPayload::ElementwiseAdd {
+                    quant: ElementwiseAddQuant {
+                        input1_offset: 0,
+                        input1_multiplier: 1,
+                        input1_shift: 0,
+                        input2_offset: 0,
+                        input2_multiplier: 1,
+                        input2_shift: 0,
+                        left_shift: 20,
+                        output_offset: 0,
+                        output_multiplier: 1,
+                        output_shift: 0,
+                    },
+                    activation: ActivationType::None,
+                },
+            },
+        ];
+
+        let plan = ArenaScheduler::schedule(&graph);
+        let left = &plan.allocations[&1];
+        let right = &plan.allocations[&2];
+        let output = &plan.allocations[&3];
+        assert_ne!(left.byte_offset, right.byte_offset);
+        assert_ne!(left.byte_offset, output.byte_offset);
+        assert_ne!(right.byte_offset, output.byte_offset);
+        assert_eq!(left.lifetime.end_step, 2);
+        assert_eq!(right.lifetime.end_step, 2);
+    }
 }

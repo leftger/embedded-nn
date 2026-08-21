@@ -1,4 +1,5 @@
 use crate::ir::*;
+use crate::quant::calculate_elementwise_add_quant;
 
 pub struct ModelBuilder {
     graph: ModelGraph,
@@ -84,6 +85,7 @@ impl ModelBuilder {
                 weights,
                 packed_s4,
                 bias,
+                filter_offset: 0,
                 activation,
                 per_channel_quant,
             },
@@ -204,15 +206,16 @@ impl ModelBuilder {
         out_id
     }
 
-    /// Standard 2D dilated-conv output spatial size: `(in + 2*pad - dilation*(kernel-1) - 1) / stride + 1`.
+    /// Standard 2D dilated-conv output spatial size.
     fn conv2d_output_dim(
         in_size: usize,
         kernel: usize,
         stride: usize,
-        pad: usize,
+        pad_before: usize,
+        pad_after: usize,
         dilation: usize,
     ) -> usize {
-        (in_size + 2 * pad - dilation * (kernel - 1) - 1) / stride + 1
+        (in_size + pad_before + pad_after - dilation * (kernel - 1) - 1) / stride + 1
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -225,8 +228,7 @@ impl ModelBuilder {
         kernel_w: usize,
         stride_h: usize,
         stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
+        padding: Padding2D,
         dilation_h: usize,
         dilation_w: usize,
         weights: Vec<i8>,
@@ -246,14 +248,16 @@ impl ModelBuilder {
             input_tensor.shape.height,
             kernel_h,
             stride_h,
-            pad_h,
+            padding.top,
+            padding.bottom,
             dilation_h,
         );
         let out_w = Self::conv2d_output_dim(
             input_tensor.shape.width,
             kernel_w,
             stride_w,
-            pad_w,
+            padding.left,
+            padding.right,
             dilation_w,
         );
         let out_dtype = if packed_s4.is_some() {
@@ -287,8 +291,7 @@ impl ModelBuilder {
                 kernel_w,
                 stride_h,
                 stride_w,
-                pad_h,
-                pad_w,
+                padding,
                 dilation_h,
                 dilation_w,
                 weights,
@@ -316,8 +319,7 @@ impl ModelBuilder {
         kernel_w: usize,
         stride_h: usize,
         stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
+        padding: Padding2D,
         weights: Vec<i8>,
         bias: Option<Vec<i32>>,
         activation: ActivationType,
@@ -330,9 +332,22 @@ impl ModelBuilder {
             .iter()
             .find(|t| t.id == input_id)
             .expect("Input tensor not found");
-        let out_h =
-            Self::conv2d_output_dim(input_tensor.shape.height, kernel_h, stride_h, pad_h, 1);
-        let out_w = Self::conv2d_output_dim(input_tensor.shape.width, kernel_w, stride_w, pad_w, 1);
+        let out_h = Self::conv2d_output_dim(
+            input_tensor.shape.height,
+            kernel_h,
+            stride_h,
+            padding.top,
+            padding.bottom,
+            1,
+        );
+        let out_w = Self::conv2d_output_dim(
+            input_tensor.shape.width,
+            kernel_w,
+            stride_w,
+            padding.left,
+            padding.right,
+            1,
+        );
         let out_channels = input_tensor.shape.channels * ch_mult;
         let out_dtype = input_tensor.dtype;
 
@@ -361,8 +376,7 @@ impl ModelBuilder {
                 kernel_w,
                 stride_h,
                 stride_w,
-                pad_h,
-                pad_w,
+                padding,
                 ch_mult,
                 weights,
                 bias,
@@ -383,8 +397,7 @@ impl ModelBuilder {
         pool_w: usize,
         stride_h: usize,
         stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
+        padding: Padding2D,
     ) -> usize {
         let input_tensor = self
             .graph
@@ -392,8 +405,22 @@ impl ModelBuilder {
             .iter()
             .find(|t| t.id == input_id)
             .expect("Input tensor not found");
-        let out_h = Self::conv2d_output_dim(input_tensor.shape.height, pool_h, stride_h, pad_h, 1);
-        let out_w = Self::conv2d_output_dim(input_tensor.shape.width, pool_w, stride_w, pad_w, 1);
+        let out_h = Self::conv2d_output_dim(
+            input_tensor.shape.height,
+            pool_h,
+            stride_h,
+            padding.top,
+            padding.bottom,
+            1,
+        );
+        let out_w = Self::conv2d_output_dim(
+            input_tensor.shape.width,
+            pool_w,
+            stride_w,
+            padding.left,
+            padding.right,
+            1,
+        );
         let out_channels = input_tensor.shape.channels;
         let out_dtype = input_tensor.dtype;
         let out_quant = input_tensor.quant.clone();
@@ -425,8 +452,7 @@ impl ModelBuilder {
                 pool_w,
                 stride_h,
                 stride_w,
-                pad_h,
-                pad_w,
+                padding,
             },
         });
 
@@ -442,8 +468,7 @@ impl ModelBuilder {
         pool_w: usize,
         stride_h: usize,
         stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
+        padding: Padding2D,
     ) -> usize {
         let input_tensor = self
             .graph
@@ -451,8 +476,22 @@ impl ModelBuilder {
             .iter()
             .find(|t| t.id == input_id)
             .expect("Input tensor not found");
-        let out_h = Self::conv2d_output_dim(input_tensor.shape.height, pool_h, stride_h, pad_h, 1);
-        let out_w = Self::conv2d_output_dim(input_tensor.shape.width, pool_w, stride_w, pad_w, 1);
+        let out_h = Self::conv2d_output_dim(
+            input_tensor.shape.height,
+            pool_h,
+            stride_h,
+            padding.top,
+            padding.bottom,
+            1,
+        );
+        let out_w = Self::conv2d_output_dim(
+            input_tensor.shape.width,
+            pool_w,
+            stride_w,
+            padding.left,
+            padding.right,
+            1,
+        );
         let out_channels = input_tensor.shape.channels;
         let out_dtype = input_tensor.dtype;
         let out_quant = input_tensor.quant.clone();
@@ -482,8 +521,7 @@ impl ModelBuilder {
                 pool_w,
                 stride_h,
                 stride_w,
-                pad_h,
-                pad_w,
+                padding,
             },
         });
 
@@ -534,6 +572,140 @@ impl ModelBuilder {
         out_id
     }
 
+    pub fn add_elementwise_add_layer(
+        &mut self,
+        name: impl Into<String>,
+        input1_id: usize,
+        input2_id: usize,
+        activation: ActivationType,
+        output_quant: QuantParams,
+    ) -> Result<usize, &'static str> {
+        let input1 = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == input1_id)
+            .ok_or("ElementwiseAdd input 1 tensor not found")?;
+        let input2 = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == input2_id)
+            .ok_or("ElementwiseAdd input 2 tensor not found")?;
+        if input1.shape != input2.shape {
+            return Err("ElementwiseAdd broadcasting is not supported");
+        }
+        if input1.dtype != DataType::Int8 || input2.dtype != DataType::Int8 {
+            return Err("ElementwiseAdd only supports int8 tensors");
+        }
+
+        let shape = input1.shape;
+        let quant = calculate_elementwise_add_quant(&input1.quant, &input2.quant, &output_quant);
+        let out_id = self.next_tensor_id;
+        self.next_tensor_id += 1;
+        let layer_name = name.into();
+        self.graph.tensors.push(TensorDesc {
+            id: out_id,
+            name: format!("{}_out", layer_name),
+            shape,
+            dtype: DataType::Int8,
+            quant: output_quant,
+        });
+        let layer_id = self.next_layer_id;
+        self.next_layer_id += 1;
+        self.graph.layers.push(LayerNode {
+            id: layer_id,
+            name: layer_name,
+            inputs: vec![input1_id, input2_id],
+            outputs: vec![out_id],
+            op: OpPayload::ElementwiseAdd { quant, activation },
+        });
+        Ok(out_id)
+    }
+
+    /// Adds one of the transpose forms implemented by the runtime.
+    pub fn add_transpose_layer(
+        &mut self,
+        name: impl Into<String>,
+        input_id: usize,
+        permutation: &[usize],
+    ) -> Result<usize, &'static str> {
+        let input = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == input_id)
+            .ok_or("Transpose input tensor not found")?;
+        if input.dtype != DataType::Int8 {
+            return Err("Transpose only supports int8 tensors");
+        }
+
+        let (kind, shape) = match permutation {
+            [1, 0] => (
+                TransposeKind::Matrix2D {
+                    rows: input.shape.width,
+                    cols: input.shape.channels,
+                },
+                TensorShape::new_2d(input.shape.channels, input.shape.width),
+            ),
+            [0, 2, 1, 3] => (
+                TransposeKind::Spatial4D,
+                TensorShape::new_4d(
+                    input.shape.batches,
+                    input.shape.width,
+                    input.shape.height,
+                    input.shape.channels,
+                ),
+            ),
+            _ => return Err("unsupported transpose rank or permutation"),
+        };
+
+        let out_id = self.next_tensor_id;
+        self.next_tensor_id += 1;
+        let layer_name = name.into();
+        self.graph.tensors.push(TensorDesc {
+            id: out_id,
+            name: format!("{}_out", layer_name),
+            shape,
+            dtype: input.dtype,
+            quant: input.quant.clone(),
+        });
+        let layer_id = self.next_layer_id;
+        self.next_layer_id += 1;
+        self.graph.layers.push(LayerNode {
+            id: layer_id,
+            name: layer_name,
+            inputs: vec![input_id],
+            outputs: vec![out_id],
+            op: OpPayload::Transpose { kind },
+        });
+        Ok(out_id)
+    }
+
+    /// Sets the filter offset on a just-created fully-connected layer.
+    pub fn set_fully_connected_filter_offset(
+        &mut self,
+        layer_output_id: usize,
+        filter_offset: i32,
+    ) -> Result<(), &'static str> {
+        let layer = self
+            .graph
+            .layers
+            .iter_mut()
+            .find(|layer| layer.outputs == [layer_output_id])
+            .ok_or("FullyConnected layer not found")?;
+        match &mut layer.op {
+            OpPayload::FullyConnected {
+                filter_offset: offset,
+                ..
+            } => {
+                *offset = filter_offset;
+                Ok(())
+            }
+            _ => Err("layer is not FullyConnected"),
+        }
+    }
+
     pub fn add_softmax(&mut self, name: impl Into<String>, input_id: usize) -> usize {
         let input_tensor = self
             .graph
@@ -571,6 +743,21 @@ impl ModelBuilder {
         if !self.graph.outputs.contains(&tensor_id) {
             self.graph.outputs.push(tensor_id);
         }
+    }
+
+    pub fn set_tensor_quant(
+        &mut self,
+        tensor_id: usize,
+        quant: QuantParams,
+    ) -> Result<(), &'static str> {
+        let tensor = self
+            .graph
+            .tensors
+            .iter_mut()
+            .find(|tensor| tensor.id == tensor_id)
+            .ok_or("tensor not found")?;
+        tensor.quant = quant;
+        Ok(())
     }
 
     pub fn build(mut self) -> ModelGraph {
@@ -700,8 +887,7 @@ mod tests {
             3,
             1,
             1,
-            0,
-            0,
+            Padding2D::default(),
             1,
             1,
             vec![0; 16 * 3 * 3 * 3],
@@ -742,8 +928,7 @@ mod tests {
             3,
             1,
             1,
-            1,
-            1,
+            Padding2D::symmetric(1, 1),
             1,
             1,
             vec![0; 8 * 3 * 3 * 3],
@@ -781,8 +966,7 @@ mod tests {
             3,
             1,
             1,
-            0,
-            0,
+            Padding2D::default(),
             vec![0; 4 * 2 * 3 * 3],
             Some(vec![0; 8]),
             ActivationType::Relu,
@@ -817,7 +1001,7 @@ mod tests {
             DataType::Int8,
             Some(input_quant.clone()),
         );
-        let out_id = builder.add_maxpool2d_layer("pool1", in_id, 2, 2, 2, 2, 0, 0);
+        let out_id = builder.add_maxpool2d_layer("pool1", in_id, 2, 2, 2, 2, Padding2D::default());
 
         let out_tensor = builder
             .graph
@@ -841,7 +1025,7 @@ mod tests {
             DataType::Int8,
             None,
         );
-        let out_id = builder.add_avgpool2d_layer("pool1", in_id, 2, 2, 2, 2, 0, 0);
+        let out_id = builder.add_avgpool2d_layer("pool1", in_id, 2, 2, 2, 2, Padding2D::default());
 
         let out_tensor = builder
             .graph
@@ -888,5 +1072,70 @@ mod tests {
             .find(|l| l.name == "reshape1")
             .unwrap();
         assert!(matches!(layer.op, OpPayload::Reshape { .. }));
+    }
+
+    #[test]
+    fn test_add_elementwise_add_tracks_both_inputs_and_tflite_quantization() {
+        let mut builder = ModelBuilder::new("add_test");
+        let q1 = QuantParams {
+            scale: 0.25,
+            zero_point: -3,
+            ..QuantParams::default()
+        };
+        let q2 = QuantParams {
+            scale: 0.5,
+            zero_point: 7,
+            ..QuantParams::default()
+        };
+        let out_q = QuantParams {
+            scale: 0.125,
+            zero_point: -9,
+            ..QuantParams::default()
+        };
+        let in1 = builder.add_input("in1", TensorShape::new_1d(4), DataType::Int8, Some(q1));
+        let in2 = builder.add_input("in2", TensorShape::new_1d(4), DataType::Int8, Some(q2));
+        let out = builder
+            .add_elementwise_add_layer("add", in1, in2, ActivationType::Relu6, out_q)
+            .unwrap();
+        builder.mark_output(out);
+        let graph = builder.build();
+
+        assert_eq!(graph.layers[0].inputs, vec![in1, in2]);
+        match &graph.layers[0].op {
+            OpPayload::ElementwiseAdd { quant, activation } => {
+                assert_eq!(quant.input1_offset, 3);
+                assert_eq!(quant.input1_multiplier, 1_073_741_824);
+                assert_eq!(quant.input1_shift, -1);
+                assert_eq!(quant.input2_offset, -7);
+                assert_eq!(quant.input2_multiplier, 1_073_741_824);
+                assert_eq!(quant.input2_shift, 0);
+                assert_eq!(quant.output_offset, -9);
+                assert_eq!(quant.output_multiplier, 1_073_741_824);
+                assert_eq!(quant.output_shift, -16);
+                assert_eq!(quant.left_shift, 20);
+                assert_eq!(*activation, ActivationType::Relu6);
+            }
+            other => panic!("expected ElementwiseAdd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_transpose_builder_accepts_only_runtime_forms() {
+        let mut builder = ModelBuilder::new("transpose_test");
+        let matrix = builder.add_input("matrix", TensorShape::new_2d(2, 3), DataType::Int8, None);
+        let transposed = builder
+            .add_transpose_layer("transpose", matrix, &[1, 0])
+            .unwrap();
+        assert_eq!(
+            builder
+                .graph
+                .tensors
+                .iter()
+                .find(|tensor| tensor.id == transposed)
+                .unwrap()
+                .shape,
+            TensorShape::new_2d(3, 2)
+        );
+        assert!(builder.add_transpose_layer("bad", matrix, &[0, 1]).is_err());
     }
 }

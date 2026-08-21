@@ -36,6 +36,37 @@ fn main() {
             mismatches += 1;
             println!("MISMATCH: got {:?} expected {:?}", output, expected);
         }
+
+        let input_f32: Vec<f32> = input
+            .iter()
+            .map(|value| {
+                (*value as i32 - DenseMlpNet::INPUT_ZERO_POINT) as f32
+                    * DenseMlpNet::INPUT_SCALE
+            })
+            .collect();
+        let expected_f32: Vec<f32> = expected
+            .iter()
+            .map(|value| {
+                (*value as i32 - DenseMlpNet::OUTPUT_ZERO_POINT) as f32
+                    * DenseMlpNet::OUTPUT_SCALE
+            })
+            .collect();
+        let mut quantized_input = vec![0i8; DenseMlpNet::INPUT_DIM];
+        let mut output_f32 = vec![0.0f32; DenseMlpNet::OUTPUT_DIM];
+        DenseMlpNet::predict_f32(
+            &input_f32,
+            &mut quantized_input,
+            &mut arena,
+            &mut output_f32,
+        )
+        .unwrap();
+        if output_f32 != expected_f32 {
+            mismatches += 1;
+            println!(
+                "F32 MISMATCH: got {:?} expected {:?}",
+                output_f32, expected_f32
+            );
+        }
     }
     println!("{}/{} exact matches", total - mismatches, total);
     if mismatches > 0 {

@@ -53,7 +53,11 @@ pub fn one_over_one_plus_x_for_x_in_0_1(val: i32) -> i32 {
         x += mul_sat(x, diff) << 2;
     }
 
-    x << 1
+    // `x` can converge to exactly 2^30 for an input of zero. Doubling that value with a
+    // wrapping shift produces `i32::MIN`, turning a positive reciprocal into a negative scale
+    // and collapsing a uniform softmax to all `i8::MIN`. Q31's positive endpoint is represented
+    // by `i32::MAX`, so saturate this one unrepresentable value.
+    x.saturating_mul(2)
 }
 
 /// Performs Softmax for int8 tensors.
@@ -198,5 +202,15 @@ mod tests {
         assert!(output[3] > output[2]);
         assert!(output[2] > output[1]);
         assert!(output[1] > output[0]);
+    }
+
+    #[test]
+    fn test_softmax_s8_uniform_distribution() {
+        let input = [20i8; 4];
+        let mut output = [0i8; 4];
+
+        softmax_s8(&input, 1, 4, 1073741824, 20, -256, &mut output).unwrap();
+
+        assert_eq!(output, [-64; 4]);
     }
 }

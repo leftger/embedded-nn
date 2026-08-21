@@ -25,9 +25,9 @@ pub fn max_pool_s8(
 
     for b in 0..input_batches {
         for out_y in 0..output_h {
-            let base_y = out_y as i32 * pool_params.stride.h - pool_params.padding.h;
+            let base_y = out_y as i32 * pool_params.stride.h - pool_params.padding.top;
             for out_x in 0..output_w {
-                let base_x = out_x as i32 * pool_params.stride.w - pool_params.padding.w;
+                let base_x = out_x as i32 * pool_params.stride.w - pool_params.padding.left;
 
                 for c in 0..channels {
                     let mut max_val = i8::MIN as i32;
@@ -87,9 +87,9 @@ pub fn avg_pool_s8(
 
     for b in 0..input_batches {
         for out_y in 0..output_h {
-            let base_y = out_y as i32 * pool_params.stride.h - pool_params.padding.h;
+            let base_y = out_y as i32 * pool_params.stride.h - pool_params.padding.top;
             for out_x in 0..output_w {
-                let base_x = out_x as i32 * pool_params.stride.w - pool_params.padding.w;
+                let base_x = out_x as i32 * pool_params.stride.w - pool_params.padding.left;
 
                 for c in 0..channels {
                     let mut sum: i32 = 0;
@@ -155,9 +155,9 @@ pub fn max_pool_s16(
 
     for b in 0..input_batches {
         for out_y in 0..output_h {
-            let base_y = out_y as i32 * pool_params.stride.h - pool_params.padding.h;
+            let base_y = out_y as i32 * pool_params.stride.h - pool_params.padding.top;
             for out_x in 0..output_w {
-                let base_x = out_x as i32 * pool_params.stride.w - pool_params.padding.w;
+                let base_x = out_x as i32 * pool_params.stride.w - pool_params.padding.left;
 
                 for c in 0..channels {
                     let mut max_val = i16::MIN as i32;
@@ -217,9 +217,9 @@ pub fn avg_pool_s16(
 
     for b in 0..input_batches {
         for out_y in 0..output_h {
-            let base_y = out_y as i32 * pool_params.stride.h - pool_params.padding.h;
+            let base_y = out_y as i32 * pool_params.stride.h - pool_params.padding.top;
             for out_x in 0..output_w {
-                let base_x = out_x as i32 * pool_params.stride.w - pool_params.padding.w;
+                let base_x = out_x as i32 * pool_params.stride.w - pool_params.padding.left;
 
                 for c in 0..channels {
                     let mut sum: i64 = 0;
@@ -269,13 +269,13 @@ pub fn avg_pool_s16(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Activation;
+    use crate::types::{Activation, Padding2D};
 
     #[test]
     fn test_max_pool_s8() {
         let pool_params = PoolParams {
             stride: Tile::new(2, 2),
-            padding: Tile::new(0, 0),
+            padding: Padding2D::symmetric(0, 0),
             activation: Activation::int8_unconstrained(),
         };
 

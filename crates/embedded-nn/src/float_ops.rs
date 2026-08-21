@@ -1,6 +1,6 @@
 //! Floating-point (`f32` and `f16`) fallback operations and layers.
 
-use crate::types::{Dims, Result, Tile};
+use crate::types::{Dims, Padding2D, Result, Tile};
 
 /// IEEE-754 16-bit half-precision floating-point conversion to 32-bit single precision float.
 pub fn f16_to_f32(h: u16) -> f32 {
@@ -62,7 +62,7 @@ pub fn f32_to_f16(f: f32) -> u16 {
 /// Performs 2D Convolution for 32-bit floating point tensors.
 pub fn convolve_f32(
     stride: Tile,
-    padding: Tile,
+    padding: Padding2D,
     dilation: Tile,
     input_dims: &Dims,
     input: &[f32],
@@ -90,9 +90,9 @@ pub fn convolve_f32(
 
     for b in 0..input_batches {
         for out_y in 0..output_h {
-            let base_y = out_y as i32 * stride.h - padding.h;
+            let base_y = out_y as i32 * stride.h - padding.top;
             for out_x in 0..output_w {
-                let base_x = out_x as i32 * stride.w - padding.w;
+                let base_x = out_x as i32 * stride.w - padding.left;
 
                 for g in 0..groups {
                     for out_ch_idx in 0..output_c_per_group {

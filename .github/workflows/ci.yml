@@ -60,6 +60,35 @@ jobs:
       - run: cargo check -p embedded-nn --lib --no-default-features --features libm --target ${{ matrix.target }}
       - run: cargo check -p embedded-nn --lib --no-default-features --features float,libm --target ${{ matrix.target }}
 
+  qemu-lm3s6965:
+    name: QEMU Cortex-M3 inference
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7m-none-eabi
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: examples/qemu-lm3s6965 -> target
+      - run: sudo apt-get update && sudo apt-get install --yes qemu-system-arm
+      - run: cargo run --release
+        working-directory: examples/qemu-lm3s6965
+
+  check-stm32wba65ri:
+    name: Check STM32WBA65RI firmware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv8m.main-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: examples/stm32wba65ri -> target
+      - run: cargo check
+        working-directory: examples/stm32wba65ri
+
   msrv:
     name: MSRV check
     runs-on: ubuntu-latest

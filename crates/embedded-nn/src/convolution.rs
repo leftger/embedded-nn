@@ -39,9 +39,9 @@ pub fn convolve_s8(
 
     for b in 0..input_batches {
         for out_y in 0..output_h {
-            let base_y = out_y as i32 * conv_params.stride.h - conv_params.padding.h;
+            let base_y = out_y as i32 * conv_params.stride.h - conv_params.padding.top;
             for out_x in 0..output_w {
-                let base_x = out_x as i32 * conv_params.stride.w - conv_params.padding.w;
+                let base_x = out_x as i32 * conv_params.stride.w - conv_params.padding.left;
 
                 for g in 0..groups {
                     for out_ch_idx in 0..output_c_per_group {
@@ -71,17 +71,6 @@ pub fn convolve_s8(
                                             + conv_params.input_offset;
                                         let rhs = kernel[ker_idx_base + ic] as i32;
                                         acc += lhs * rhs;
-                                    }
-                                } else {
-                                    // Zero-point masking under padding: the true padded value is
-                                    // 0, which after `+ input_offset` is `input_offset`, not "no
-                                    // contribution" -- required for bit-exact asymmetric-quantized
-                                    // SAME-padding results. A no-op when input_offset == 0
-                                    // (symmetric quantization), which is why this was safe to add
-                                    // without affecting any existing symmetric-quantized model.
-                                    for ic in 0..kernel_c {
-                                        let rhs = kernel[ker_idx_base + ic] as i32;
-                                        acc += conv_params.input_offset * rhs;
                                     }
                                 }
                             }
@@ -137,9 +126,9 @@ pub fn convolve_per_channel_s8(
 
     for b in 0..input_batches {
         for out_y in 0..output_h {
-            let base_y = out_y as i32 * conv_params.stride.h - conv_params.padding.h;
+            let base_y = out_y as i32 * conv_params.stride.h - conv_params.padding.top;
             for out_x in 0..output_w {
-                let base_x = out_x as i32 * conv_params.stride.w - conv_params.padding.w;
+                let base_x = out_x as i32 * conv_params.stride.w - conv_params.padding.left;
 
                 for g in 0..groups {
                     for out_ch_idx in 0..output_c_per_group {
@@ -169,12 +158,6 @@ pub fn convolve_per_channel_s8(
                                             + conv_params.input_offset;
                                         let rhs = kernel[ker_idx_base + ic] as i32;
                                         acc += lhs * rhs;
-                                    }
-                                } else {
-                                    // Zero-point masking under padding (see convolve_s8).
-                                    for ic in 0..kernel_c {
-                                        let rhs = kernel[ker_idx_base + ic] as i32;
-                                        acc += conv_params.input_offset * rhs;
                                     }
                                 }
                             }
@@ -227,9 +210,9 @@ pub fn depthwise_conv_per_channel_s8(
 
     for b in 0..input_batches {
         for out_y in 0..output_h {
-            let base_y = out_y as i32 * dw_params.stride.h - dw_params.padding.h;
+            let base_y = out_y as i32 * dw_params.stride.h - dw_params.padding.top;
             for out_x in 0..output_w {
-                let base_x = out_x as i32 * dw_params.stride.w - dw_params.padding.w;
+                let base_x = out_x as i32 * dw_params.stride.w - dw_params.padding.left;
 
                 for out_c in 0..output_c {
                     let in_c = out_c / ch_mult;
@@ -256,10 +239,6 @@ pub fn depthwise_conv_per_channel_s8(
                                 let lhs = input[in_idx] as i32 + dw_params.input_offset;
                                 let rhs = kernel[ker_idx] as i32;
                                 acc += lhs * rhs;
-                            } else {
-                                // Zero-point masking under padding (see convolve_s8).
-                                let rhs = kernel[ker_idx] as i32;
-                                acc += dw_params.input_offset * rhs;
                             }
                         }
                     }
@@ -307,8 +286,8 @@ pub fn transpose_conv_s8(
 
     let stride_y = conv_params.stride.h as usize;
     let stride_x = conv_params.stride.w as usize;
-    let pad_y = conv_params.padding.h as usize;
-    let pad_x = conv_params.padding.w as usize;
+    let pad_y = conv_params.padding.top as usize;
+    let pad_x = conv_params.padding.left as usize;
 
     let mut accum_buffer = [0i32; 1024]; // Stack scratch accumulator for 1024 elements chunk or dynamic iteration
     let scratch_size = output_h * output_w * output_c;
@@ -429,6 +408,7 @@ pub fn convolve_1_x_n_s8(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Padding2D;
     use crate::types::{Activation, Tile};
 
     #[test]
@@ -437,7 +417,7 @@ mod tests {
             input_offset: 0,
             output_offset: 0,
             stride: Tile::new(1, 1),
-            padding: Tile::new(0, 0),
+            padding: Padding2D::symmetric(0, 0),
             dilation: Tile::new(1, 1),
             activation: Activation::int8_unconstrained(),
         };
@@ -470,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn test_convolve_s8_zero_point_masking_under_same_padding() {
+    fn test_convolve_s8_padding_is_quantized_zero() {
         // 1x3x3x1 input, single channel:
         // 1 2 3
         // 4 5 6
@@ -491,7 +471,7 @@ mod tests {
             input_offset,
             output_offset: 0,
             stride: Tile::new(1, 1),
-            padding: Tile::new(1, 1),
+            padding: Padding2D::symmetric(1, 1),
             dilation: Tile::new(1, 1),
             activation: Activation::int8_unconstrained(),
         };
@@ -510,21 +490,16 @@ mod tests {
         )
         .unwrap();
 
-        // Top-left output (0,0): the 3x3 window covers input rows/cols [-1, 0, 1], so only the
-        // bottom-right 2x2 (values 1, 2, 4, 5) are real; the other 5 taps are padding. Zero-point
-        // masking means each padded tap still contributes `input_offset * weight` (weight = 1
-        // here), not nothing.
-        let masked_raw = (1 + 10) + (2 + 10) + (4 + 10) + (5 + 10) + 5 * (0 + 10);
-        let masked_expected =
-            requantize(masked_raw, quant_params.multiplier, quant_params.shift) as i8;
-        assert_eq!(output[0], masked_expected);
+        // Top-left output (0,0): only the bottom-right 2x2 taps are in bounds. TFLite padding is
+        // real zero, represented by the input zero-point, so centered padded values contribute
+        // zero. In particular, padding must not contribute `input_offset * weight`.
+        let raw = (1 + 10) + (2 + 10) + (4 + 10) + (5 + 10);
+        let expected = requantize(raw, quant_params.multiplier, quant_params.shift) as i8;
+        assert_eq!(output[0], expected);
 
-        // Sanity: this must differ from the old "skip padding entirely" behavior, which ignored
-        // the 5 padded taps' offset contribution entirely (raw acc = 52 instead of 102).
-        let unmasked_raw = (1 + 10) + (2 + 10) + (4 + 10) + (5 + 10);
-        let unmasked_expected =
-            requantize(unmasked_raw, quant_params.multiplier, quant_params.shift) as i8;
-        assert_ne!(output[0], unmasked_expected);
+        let incorrect_full_field =
+            requantize(raw + 5 * 10, quant_params.multiplier, quant_params.shift) as i8;
+        assert_ne!(output[0], incorrect_full_field);
     }
 
     #[test]
@@ -542,7 +517,7 @@ mod tests {
             input_offset: 0,
             output_offset: 0,
             stride: Tile::new(1, 1),
-            padding: Tile::new(1, 1),
+            padding: Padding2D::symmetric(1, 1),
             dilation: Tile::new(1, 1),
             activation: Activation::int8_unconstrained(),
         };

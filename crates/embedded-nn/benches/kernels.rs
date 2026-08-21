@@ -3,8 +3,9 @@
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use embedded_nn::{
-    Activation, ConvParams, Dims, FcParams, PerChannelQuantParams, PerTensorQuantParams, Tile,
-    convolve_1_x_n_s8, fully_connected_per_channel_s8, fully_connected_s8, requantize, softmax_s8,
+    Activation, ConvParams, Dims, FcParams, Padding2D, PerChannelQuantParams, PerTensorQuantParams,
+    Tile, convolve_1_x_n_s8, fully_connected_per_channel_s8, fully_connected_s8, requantize,
+    softmax_s8,
 };
 
 fn bench_fully_connected_s8(c: &mut Criterion) {
@@ -98,7 +99,7 @@ fn bench_convolve_1_x_n_s8(c: &mut Criterion) {
         input_offset: 0,
         output_offset: 0,
         stride: Tile::new(1, 1),
-        padding: Tile::new(0, 0),
+        padding: Padding2D::symmetric(0, 0),
         dilation: Tile::new(1, 1),
         activation: Activation::int8_unconstrained(),
     };

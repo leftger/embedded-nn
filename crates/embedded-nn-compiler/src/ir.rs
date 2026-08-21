@@ -27,6 +27,33 @@ pub struct TensorShape {
     pub channels: usize,
 }
 
+/// Explicit spatial padding for a 2D operation.
+///
+/// This replaces the former symmetric `pad_h`/`pad_w` JSON fields. The schema change is
+/// intentional so asymmetric models cannot be silently loaded as symmetric ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Padding2D {
+    pub top: usize,
+    pub bottom: usize,
+    pub left: usize,
+    pub right: usize,
+}
+
+impl Padding2D {
+    pub const fn new(top: usize, bottom: usize, left: usize, right: usize) -> Self {
+        Self {
+            top,
+            bottom,
+            left,
+            right,
+        }
+    }
+
+    pub const fn symmetric(pad_h: usize, pad_w: usize) -> Self {
+        Self::new(pad_h, pad_h, pad_w, pad_w)
+    }
+}
+
 impl TensorShape {
     pub const fn new_1d(len: usize) -> Self {
         Self {
@@ -117,12 +144,36 @@ pub struct PerChannelQuant {
     pub shifts: Vec<i32>,
 }
 
+/// Fixed-point parameters for TFLite-compatible quantized elementwise addition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ElementwiseAddQuant {
+    pub input1_offset: i32,
+    pub input1_multiplier: i32,
+    pub input1_shift: i32,
+    pub input2_offset: i32,
+    pub input2_multiplier: i32,
+    pub input2_shift: i32,
+    pub left_shift: i32,
+    pub output_offset: i32,
+    pub output_multiplier: i32,
+    pub output_shift: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransposeKind {
+    /// Rank-2 `[rows, cols]` with permutation `[1, 0]`.
+    Matrix2D { rows: usize, cols: usize },
+    /// Rank-4 NHWC with permutation `[0, 2, 1, 3]`.
+    Spatial4D,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum OpPayload {
     FullyConnected {
         weights: Vec<i8>,
         packed_s4: Option<Vec<i8>>,
         bias: Option<Vec<i32>>,
+        filter_offset: i32,
         activation: ActivationType,
         per_channel_quant: Option<PerChannelQuant>,
     },
@@ -131,8 +182,7 @@ pub enum OpPayload {
         kernel_w: usize,
         stride_h: usize,
         stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
+        padding: Padding2D,
         dilation_h: usize,
         dilation_w: usize,
         weights: Vec<i8>,
@@ -146,8 +196,7 @@ pub enum OpPayload {
         kernel_w: usize,
         stride_h: usize,
         stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
+        padding: Padding2D,
         /// Channel multiplier: `output_channels = input_channels * ch_mult`, matching the
         /// runtime's `DwConvParams.ch_mult`.
         ch_mult: usize,
@@ -161,20 +210,22 @@ pub enum OpPayload {
         pool_w: usize,
         stride_h: usize,
         stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
+        padding: Padding2D,
     },
     AvgPool2D {
         pool_h: usize,
         pool_w: usize,
         stride_h: usize,
         stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
+        padding: Padding2D,
     },
     Softmax,
     ElementwiseAdd {
+        quant: ElementwiseAddQuant,
         activation: ActivationType,
+    },
+    Transpose {
+        kind: TransposeKind,
     },
     Reshape {
         new_shape: TensorShape,
@@ -324,6 +375,15 @@ impl ModelGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn padding_json_uses_explicit_sides_and_rejects_legacy_shape() {
+        let padding = Padding2D::new(0, 1, 2, 3);
+        let json = serde_json::to_string(&padding).unwrap();
+        assert_eq!(json, r#"{"top":0,"bottom":1,"left":2,"right":3}"#);
+        assert_eq!(serde_json::from_str::<Padding2D>(&json).unwrap(), padding);
+        assert!(serde_json::from_str::<Padding2D>(r#"{"pad_h":1,"pad_w":2}"#).is_err());
+    }
 
     #[test]
     fn test_total_weights_size_bytes_conv1d() {

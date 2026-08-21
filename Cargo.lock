@@ -1264,8 +1264,10 @@ dependencies = [
 name = "embedded-nn-macros"
 version = "0.2.0"
 dependencies = [
+ "embedded-nn",
  "embedded-nn-codegen",
  "embedded-nn-compiler",
+ "embedded-nn-tflite",
  "proc-macro2",
  "serde_json",
  "syn 2.0.119",

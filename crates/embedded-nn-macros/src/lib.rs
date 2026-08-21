@@ -14,9 +14,25 @@ fn resolve_model_path(manifest_dir: &str, relative: &str) -> PathBuf {
 }
 
 fn load_model_graph(path: &Path) -> Result<ModelGraph, String> {
-    let content = std::fs::read_to_string(path)
+    let bytes = std::fs::read(path)
         .map_err(|err| format!("Failed to read model file at {:?}: {}", path, err))?;
-    serde_json::from_str(&content).map_err(|err| format!("Failed to parse model JSON: {}", err))
+
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some(extension) if extension.eq_ignore_ascii_case("json") => serde_json::from_slice(&bytes)
+            .map_err(|err| format!("Failed to parse model JSON: {}", err)),
+        Some(extension)
+            if extension.eq_ignore_ascii_case("tflite")
+                || extension.eq_ignore_ascii_case("bin") =>
+        {
+            embedded_nn_tflite::import_tflite(&bytes)
+                .map_err(|err| format!("Failed to import TFLite model: {}", err))
+        }
+        Some(extension) => Err(format!(
+            "Unsupported model file extension .{}; expected .json, .tflite, or .bin",
+            extension
+        )),
+        None => Err("Model file has no extension; expected .json, .tflite, or .bin".into()),
+    }
 }
 
 fn generate_code(graph: &ModelGraph, struct_name: &str) -> String {
@@ -27,6 +43,16 @@ fn generate_code(graph: &ModelGraph, struct_name: &str) -> String {
 fn parse_generated_tokens(code: &str) -> Result<proc_macro2::TokenStream, String> {
     code.parse::<proc_macro2::TokenStream>()
         .map_err(|err| format!("Failed to parse generated tokens: {}", err))
+}
+
+fn dump_generated_code_to(out_dir: &Path, code: &str) -> std::io::Result<()> {
+    std::fs::write(out_dir.join("embedded-nn-expansion.rs"), code)
+}
+
+fn dump_generated_code(code: &str) {
+    if let Ok(out_dir) = std::env::var("OUT_DIR") {
+        let _ = dump_generated_code_to(Path::new(&out_dir), code);
+    }
 }
 
 #[proc_macro_attribute]
@@ -52,6 +78,7 @@ pub fn embedded_nn_model(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     let generated_code = generate_code(&graph, &struct_name);
+    dump_generated_code(&generated_code);
 
     match parse_generated_tokens(&generated_code) {
         Ok(tokens) => tokens.into(),
@@ -110,6 +137,44 @@ mod tests {
     fn test_load_model_graph_missing_file() {
         let err = load_model_graph(Path::new("/nonexistent/path/model.json")).unwrap_err();
         assert!(err.contains("Failed to read model file"));
+    }
+
+    #[test]
+    fn test_load_model_graph_dispatches_tflite_and_bin_to_importer() {
+        for extension in ["tflite", "bin"] {
+            let path = write_temp_file(&format!("invalid.{extension}"), "not a flatbuffer");
+            let err = load_model_graph(&path).unwrap_err();
+            assert!(err.contains("Failed to import TFLite model"), "{err}");
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn test_load_model_graph_rejects_unknown_extension() {
+        let path = write_temp_file("model.txt", "{}");
+        let err = load_model_graph(&path).unwrap_err();
+        assert!(
+            err.contains("Unsupported model file extension .txt"),
+            "{err}"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_dump_generated_code_writes_expected_file() {
+        let out_dir = std::env::temp_dir().join(format!(
+            "embedded_nn_macros_dump_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let path = out_dir.join("embedded-nn-expansion.rs");
+        dump_generated_code_to(&out_dir, "pub struct Dumped;").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "pub struct Dumped;"
+        );
+        let _ = std::fs::remove_dir_all(out_dir);
     }
 
     #[test]

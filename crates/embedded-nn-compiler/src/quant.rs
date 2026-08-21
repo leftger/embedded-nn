@@ -1,4 +1,4 @@
-use crate::ir::QuantParams;
+use crate::ir::{ElementwiseAddQuant, QuantParams};
 use embedded_nn::subbyte::pack_s4_pair;
 
 /// Calculate symmetric s8 quantization parameters from float min/max
@@ -69,6 +69,39 @@ pub fn calculate_output_requant_multiplier(
         0.0
     };
     quantize_multiplier(real_multiplier)
+}
+
+/// Derives the fixed-point parameters used by TFLite Micro's quantized ADD preparation.
+///
+/// Both inputs are first rescaled into a common domain with 20 bits of headroom, then the
+/// accumulated sum is requantized into the output tensor's scale.
+pub fn calculate_elementwise_add_quant(
+    input1: &QuantParams,
+    input2: &QuantParams,
+    output: &QuantParams,
+) -> ElementwiseAddQuant {
+    const LEFT_SHIFT: i32 = 20;
+    let twice_max_input_scale = 2.0 * input1.scale.max(input2.scale);
+    let (input1_multiplier, input1_shift) =
+        quantize_multiplier(input1.scale / twice_max_input_scale);
+    let (input2_multiplier, input2_shift) =
+        quantize_multiplier(input2.scale / twice_max_input_scale);
+    let output_real_multiplier =
+        twice_max_input_scale / ((1_i64 << LEFT_SHIFT) as f32 * output.scale);
+    let (output_multiplier, output_shift) = quantize_multiplier(output_real_multiplier);
+
+    ElementwiseAddQuant {
+        input1_offset: -input1.zero_point,
+        input1_multiplier,
+        input1_shift,
+        input2_offset: -input2.zero_point,
+        input2_multiplier,
+        input2_shift,
+        left_shift: LEFT_SHIFT,
+        output_offset: output.zero_point,
+        output_multiplier,
+        output_shift,
+    }
 }
 
 /// Convert real scale multiplier (0..1) to fixed-point (multiplier in Q31, shift)
