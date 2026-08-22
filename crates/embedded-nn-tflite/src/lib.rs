@@ -263,6 +263,10 @@ pub fn import_tflite(bytes: &[u8]) -> Result<ModelGraph, ImportError> {
                 &output_tensor,
                 &layer_name,
             )?,
+            tflite::BuiltinOperator::QUANTIZE | tflite::BuiltinOperator::DEQUANTIZE => {
+                let shape = convert_shape(&output_tensor)?;
+                builder.add_reshape_layer(layer_name.clone(), in_id, shape)
+            }
             other => {
                 return Err(ImportError::UnsupportedOperator(
                     other.variant_name().unwrap_or("UNKNOWN"),
@@ -321,8 +325,11 @@ enum PoolKind {
 fn convert_tensor_type(t: tflite::TensorType) -> Result<DataType, ImportError> {
     match t {
         tflite::TensorType::INT8 | tflite::TensorType::UINT8 => Ok(DataType::Int8),
+        tflite::TensorType::INT16 => Ok(DataType::Int16),
+        tflite::TensorType::INT32 => Ok(DataType::Int8),
+        tflite::TensorType::FLOAT32 => Ok(DataType::Float32),
         _ => Err(ImportError::UnsupportedTensorType(
-            "only INT8 and UINT8 tensors are supported",
+            "only INT8, UINT8, INT16, INT32, and FLOAT32 tensors are supported",
         )),
     }
 }

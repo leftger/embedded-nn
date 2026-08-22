@@ -164,6 +164,68 @@ pub fn convolve_s4(
     Ok(())
 }
 
+/// Performs per-tensor quantized int4 (`s4`) Fully Connected layer with a 16-entry Codebook Lookup Table (LUT).
+///
+/// Weight indices are packed in `packed_indices` (2 per byte). Each nibble indexes into `codebook_lut`.
+pub fn fully_connected_s4_lut(
+    fc_params: &FcParams,
+    quant_params: &PerTensorQuantParams,
+    input_dims: &Dims,
+    input: &[i8],
+    filter_dims: &Dims,
+    packed_indices: &[i8],
+    codebook_lut: &[i8; 16],
+    bias: Option<&[i32]>,
+    output_dims: &Dims,
+    output: &mut [i8],
+) -> Result<()> {
+    let batches = input_dims.n as usize;
+    let accum_depth = filter_dims.n as usize;
+    let output_depth = output_dims.c as usize;
+    let packed_cols = (accum_depth + 1) / 2;
+
+    for b in 0..batches {
+        let input_batch = &input[b * accum_depth..(b + 1) * accum_depth];
+        let output_batch = &mut output[b * output_depth..(b + 1) * output_depth];
+
+        for out_c in 0..output_depth {
+            let mut acc: i32 = match bias {
+                Some(b_slice) => b_slice[out_c],
+                None => 0,
+            };
+
+            let row_packed = &packed_indices[out_c * packed_cols..(out_c + 1) * packed_cols];
+
+            for p in 0..packed_cols {
+                let byte = row_packed[p] as u8;
+                let idx0 = (byte & 0x0F) as usize;
+                let idx1 = ((byte >> 4) & 0x0F) as usize;
+
+                let w0 = codebook_lut[idx0] as i32;
+                let w1 = codebook_lut[idx1] as i32;
+
+                let in_idx0 = p * 2;
+                if in_idx0 < accum_depth {
+                    let lhs0 = input_batch[in_idx0] as i32 + fc_params.input_offset;
+                    acc += lhs0 * w0;
+                }
+                let in_idx1 = in_idx0 + 1;
+                if in_idx1 < accum_depth {
+                    let lhs1 = input_batch[in_idx1] as i32 + fc_params.input_offset;
+                    acc += lhs1 * w1;
+                }
+            }
+
+            acc = requantize(acc, quant_params.multiplier, quant_params.shift);
+            acc += fc_params.output_offset;
+            acc = clamp(acc, fc_params.activation.min, fc_params.activation.max);
+
+            output_batch[out_c] = acc as i8;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,5 +326,47 @@ mod tests {
         // 2*1 + 4*2 + 6*3 + 8*4 = 2 + 8 + 18 + 32 = 60
         // Requantized: 60 * 0.5 = 30
         assert_eq!(output[0], 30);
+    }
+
+    #[test]
+    fn test_fully_connected_s4_lut() {
+        let fc_params = FcParams {
+            input_offset: 0,
+            filter_offset: 0,
+            output_offset: 0,
+            activation: Activation::int8_unconstrained(),
+        };
+        let quant_params = PerTensorQuantParams::new(1073741824, 0); // 0.5
+        let input_dims = Dims::new(1, 1, 1, 2);
+        let input = [10i8, 20i8];
+
+        let filter_dims = Dims::new(2, 1, 1, 1);
+        // Codebook LUT with custom nonlinear clusters
+        let mut codebook = [0i8; 16];
+        codebook[1] = 5; // index 1 -> weight +5
+        codebook[2] = -2; // index 2 -> weight -2
+
+        // Packed index byte: low = 1, high = 2 -> (1 | (2 << 4)) = 0x21
+        let packed_indices = [0x21i8];
+        let output_dims = Dims::new(1, 1, 1, 1);
+        let mut output = [0i8; 1];
+
+        fully_connected_s4_lut(
+            &fc_params,
+            &quant_params,
+            &input_dims,
+            &input,
+            &filter_dims,
+            &packed_indices,
+            &codebook,
+            None,
+            &output_dims,
+            &mut output,
+        )
+        .unwrap();
+
+        // 10*5 + 20*(-2) = 50 - 40 = 10
+        // Requantized: 10 * 0.5 = 5
+        assert_eq!(output[0], 5);
     }
 }
