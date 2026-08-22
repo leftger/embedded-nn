@@ -599,6 +599,7 @@ dependencies = [
  "embedded-nn-compiler",
  "proc-macro2",
  "quote",
+ "serde",
  "syn 2.0.119",
  "thiserror",
 ]
