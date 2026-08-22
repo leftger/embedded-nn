@@ -10,4 +10,5 @@ description = "Host-side Burn trainer: float PTQ and fake-quant QAT into embedde
 [dependencies]
 embedded-nn-compiler = { workspace = true }
 burn = { version = "0.18.0", default-features = false, features = ["std", "train", "ndarray"] }
+serde = { workspace = true }
 thiserror = { workspace = true }

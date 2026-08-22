@@ -21,7 +21,13 @@ embedded-nn-train = { workspace = true }
 eframe = { workspace = true }
 egui_extras = { workspace = true }
 rfd = { workspace = true }
-nusb = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+nusb = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement"] }

@@ -31,6 +31,35 @@ impl DatasetRecord {
             .collect()
     }
 
+    /// Number of distinct sensor channels in this record.
+    pub fn channel_count(&self) -> usize {
+        self.channel_names.len()
+    }
+
+    /// Extracts a specific channel across all time steps.
+    pub fn channel_slice(&self, channel_idx: usize) -> Vec<f32> {
+        self.waveform
+            .iter()
+            .map(|step| step.get(channel_idx).copied().unwrap_or(0.0))
+            .collect()
+    }
+
+    /// Computes separate Accelerometer (first 3 channels) and Gyroscope (channels 3..6)
+    /// vector magnitudes for 6-DOF IMU sensor fusion.
+    pub fn imu_6dof_magnitude_split(&self) -> (Vec<f32>, Vec<f32>) {
+        let mut accel_mag = Vec::with_capacity(self.waveform.len());
+        let mut gyro_mag = Vec::with_capacity(self.waveform.len());
+
+        for step in &self.waveform {
+            let a_sq: f32 = step.iter().take(3).map(|v| v * v).sum();
+            let g_sq: f32 = step.iter().skip(3).take(3).map(|v| v * v).sum();
+            accel_mag.push(a_sq.sqrt());
+            gyro_mag.push(g_sq.sqrt());
+        }
+
+        (accel_mag, gyro_mag)
+    }
+
     pub fn label_or(&self, fallback: &str) -> String {
         match self.label.as_deref().map(str::trim) {
             Some(label) if !label.is_empty() => label.to_string(),
@@ -102,6 +131,32 @@ mod tests {
         let contents = "{\"sample_id\":\"a\",\"label\":null,\"sample_rate_hz\":50.0,\"channel_names\":[\"value\"],\"waveform\":[[1.0]]}\nnot json\n";
         let err = parse_jsonl(contents).unwrap_err();
         assert_eq!(err.line, 2);
+    }
+
+    #[test]
+    fn test_imu_6dof_magnitude_split() {
+        let r = DatasetRecord {
+            sample_id: "s6dof".into(),
+            label: Some("swing".into()),
+            sample_rate_hz: 100.0,
+            channel_names: vec![
+                "ax".into(),
+                "ay".into(),
+                "az".into(),
+                "gx".into(),
+                "gy".into(),
+                "gz".into(),
+            ],
+            waveform: vec![
+                vec![3.0, 4.0, 0.0, 6.0, 8.0, 0.0],
+                vec![0.0, 0.0, 1.0, 0.0, 0.0, 2.0],
+            ],
+        };
+        let (accel, gyro) = r.imu_6dof_magnitude_split();
+        assert_eq!(accel, vec![5.0, 1.0]);
+        assert_eq!(gyro, vec![10.0, 2.0]);
+        assert_eq!(r.channel_slice(0), vec![3.0, 0.0]);
+        assert_eq!(r.channel_slice(3), vec![6.0, 0.0]);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Fully Connected (Linear / Dense) and Batch Matrix Multiplication operations.
 
-use crate::support::{clamp, requantize};
+use crate::support::{clamp, dot_product_s8_accum, requantize};
 use crate::types::{Dims, FcParams, PerChannelQuantParams, PerTensorQuantParams, Result};
 
 /// Performs per-tensor quantized int8 Fully Connected layer.
@@ -24,18 +24,19 @@ pub fn fully_connected_s8(
         let output_batch = &mut output[b * output_depth..(b + 1) * output_depth];
 
         for out_c in 0..output_depth {
-            let mut acc: i32 = match bias {
+            let initial_bias: i32 = match bias {
                 Some(b_slice) => b_slice[out_c],
                 None => 0,
             };
 
             let kernel_row = &kernel[out_c * accum_depth..(out_c + 1) * accum_depth];
-
-            for i in 0..accum_depth {
-                let lhs = input_batch[i] as i32 + fc_params.input_offset;
-                let rhs = kernel_row[i] as i32 + fc_params.filter_offset;
-                acc += lhs * rhs;
-            }
+            let dot = dot_product_s8_accum(
+                input_batch,
+                kernel_row,
+                fc_params.input_offset,
+                fc_params.filter_offset,
+            );
+            let mut acc = initial_bias + dot;
 
             acc = requantize(acc, quant_params.multiplier, quant_params.shift);
             acc += fc_params.output_offset;
@@ -68,18 +69,19 @@ pub fn fully_connected_per_channel_s8(
         let output_batch = &mut output[b * output_depth..(b + 1) * output_depth];
 
         for out_c in 0..output_depth {
-            let mut acc: i32 = match bias {
+            let initial_bias: i32 = match bias {
                 Some(b_slice) => b_slice[out_c],
                 None => 0,
             };
 
             let kernel_row = &kernel[out_c * accum_depth..(out_c + 1) * accum_depth];
-
-            for i in 0..accum_depth {
-                let lhs = input_batch[i] as i32 + fc_params.input_offset;
-                let rhs = kernel_row[i] as i32 + fc_params.filter_offset;
-                acc += lhs * rhs;
-            }
+            let dot = dot_product_s8_accum(
+                input_batch,
+                kernel_row,
+                fc_params.input_offset,
+                fc_params.filter_offset,
+            );
+            let mut acc = initial_bias + dot;
 
             let mult = quant_params.multiplier[out_c];
             let shift = quant_params.shift[out_c];

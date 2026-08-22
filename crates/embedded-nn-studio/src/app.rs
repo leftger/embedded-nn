@@ -17,6 +17,7 @@ pub enum StudioTab {
     Gesture3D,
     Dsp,
     Train,
+    Pareto,
     Arena,
     Codegen,
     Inspector,
@@ -111,9 +112,10 @@ impl eframe::App for EmbeddedNnStudioApp {
                 let tab_2_label = "2. 🌐 3D Gesture".to_string();
                 let tab_3_label = format!("3. DSP ({} bins)", mel_bins);
                 let tab_4_label = format!("4. Train ({:.0}% acc)", latest_acc);
-                let tab_5_label = format!("5. Arena ({} B)", arena_bytes);
-                let tab_6_label = "6. Codegen".to_string();
-                let tab_7_label = "7. 🔬 Live Inspector".to_string();
+                let tab_pareto_label = "5. ⚡ Pareto".to_string();
+                let tab_5_label = format!("6. Arena ({} B)", arena_bytes);
+                let tab_6_label = "7. Codegen".to_string();
+                let tab_7_label = "8. 🔬 Live Inspector".to_string();
 
                 ui.selectable_value(&mut self.current_tab, StudioTab::Ingest, tab_1_label);
                 ui.label("➔");
@@ -122,6 +124,8 @@ impl eframe::App for EmbeddedNnStudioApp {
                 ui.selectable_value(&mut self.current_tab, StudioTab::Dsp, tab_3_label);
                 ui.label("➔");
                 ui.selectable_value(&mut self.current_tab, StudioTab::Train, tab_4_label);
+                ui.label("➔");
+                ui.selectable_value(&mut self.current_tab, StudioTab::Pareto, tab_pareto_label);
                 ui.label("➔");
                 ui.selectable_value(&mut self.current_tab, StudioTab::Arena, tab_5_label);
                 ui.label("➔");
@@ -162,6 +166,7 @@ impl eframe::App for EmbeddedNnStudioApp {
             }
             StudioTab::Dsp => self.dsp_view.show(ui, &mut self.state),
             StudioTab::Train => self.train_view.show(ui, &mut self.state),
+            StudioTab::Pareto => crate::views::pareto::render(ui, &mut self.state),
             StudioTab::Arena => self.arena_view.show(ui, &mut self.state),
             StudioTab::Codegen => {
                 self.codegen_view
@@ -206,4 +211,19 @@ pub fn run_studio() -> eframe::Result<()> {
             Ok(Box::new(EmbeddedNnStudioApp::default()))
         }),
     )
+}
+
+#[cfg(target_arch = "wasm32")]
+pub async fn run_studio_web(canvas_id: &str) -> Result<(), eframe::wasm_bindgen::JsValue> {
+    let web_options = eframe::WebOptions::default();
+    eframe::WebRunner::new()
+        .start(
+            canvas_id,
+            web_options,
+            Box::new(|cc| {
+                configure_theme(&cc.egui_ctx);
+                Ok(Box::new(EmbeddedNnStudioApp::default()))
+            }),
+        )
+        .await
 }

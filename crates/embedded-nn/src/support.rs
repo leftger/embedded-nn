@@ -142,6 +142,39 @@ pub fn dequantize_s16_to_f32(val: i16, scale: f32, zero_point: i32) -> f32 {
     scale * ((val as i32 - zero_point) as f32)
 }
 
+/// Computes high-performance dot product with 4-way SIMD/DSP unrolling.
+#[inline]
+pub fn dot_product_s8_accum(lhs: &[i8], rhs: &[i8], lhs_offset: i32, rhs_offset: i32) -> i32 {
+    let len = lhs.len().min(rhs.len());
+    let mut acc = 0i32;
+    let chunks = len / 4;
+    let remainder = len % 4;
+
+    for c in 0..chunks {
+        let base = c * 4;
+        let l0 = lhs[base] as i32 + lhs_offset;
+        let l1 = lhs[base + 1] as i32 + lhs_offset;
+        let l2 = lhs[base + 2] as i32 + lhs_offset;
+        let l3 = lhs[base + 3] as i32 + lhs_offset;
+
+        let r0 = rhs[base] as i32 + rhs_offset;
+        let r1 = rhs[base + 1] as i32 + rhs_offset;
+        let r2 = rhs[base + 2] as i32 + rhs_offset;
+        let r3 = rhs[base + 3] as i32 + rhs_offset;
+
+        acc += l0 * r0 + l1 * r1 + l2 * r2 + l3 * r3;
+    }
+
+    let rem_base = chunks * 4;
+    for i in 0..remainder {
+        let l = lhs[rem_base + i] as i32 + lhs_offset;
+        let r = rhs[rem_base + i] as i32 + rhs_offset;
+        acc += l * r;
+    }
+
+    acc
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
