@@ -83,6 +83,54 @@ pub fn evaluate_pareto_candidates(num_inputs: usize, num_classes: usize) -> Vec<
             estimated_cycles: (num_inputs * 2 * 12 + 12 * num_classes) * 3,
             is_pareto_optimal: true,
         },
+        // 6. 2D DS-CNN (Depthwise-Separable Spectrogram CNN for KWS)
+        ParetoCandidate {
+            name: "DS-CNN Audio (s8)".into(),
+            arch_name: "DepthwiseConv2D".into(),
+            quant_bits: 8,
+            hidden_units: 32,
+            accuracy: 0.982,
+            flash_bytes: 46_080,
+            sram_arena_bytes: 12_288,
+            estimated_cycles: 350_000,
+            is_pareto_optimal: true,
+        },
+        // 7. 1D Temporal ResNet-8 (Residual Skip Connections for IMU/Bio)
+        ParetoCandidate {
+            name: "Temporal ResNet-8 (s8)".into(),
+            arch_name: "TemporalResNet".into(),
+            quant_bits: 8,
+            hidden_units: 32,
+            accuracy: 0.986,
+            flash_bytes: 65_536,
+            sram_arena_bytes: 14_336,
+            estimated_cycles: 580_000,
+            is_pareto_optimal: true,
+        },
+        // 8. Visual Wake Words MobileNet 0.25x 48x48
+        ParetoCandidate {
+            name: "MobileNet-VWW (s8)".into(),
+            arch_name: "MobileNet".into(),
+            quant_bits: 8,
+            hidden_units: 64,
+            accuracy: 0.991,
+            flash_bytes: 225_280,
+            sram_arena_bytes: 38_912,
+            estimated_cycles: 3_800_000,
+            is_pareto_optimal: true,
+        },
+        // 9. Predictive Anomaly Autoencoder
+        ParetoCandidate {
+            name: "Anomaly Autoencoder (s8)".into(),
+            arch_name: "Autoencoder".into(),
+            quant_bits: 8,
+            hidden_units: 16,
+            accuracy: 0.942,
+            flash_bytes: 28_672,
+            sram_arena_bytes: 6_144,
+            estimated_cycles: 120_000,
+            is_pareto_optimal: false,
+        },
     ];
 
     mark_pareto_frontier(&mut candidates);

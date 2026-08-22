@@ -77,6 +77,25 @@ impl eframe::App for EmbeddedNnStudioApp {
                 {
                     self.state.reset_showcase_pipeline();
                 }
+                egui::ComboBox::from_id_salt("top_model_zoo_presets_combo")
+                    .selected_text("🏛️ Model Zoo Presets")
+                    .show_ui(ui, |ui| {
+                        for preset in crate::state::ModelZooPreset::ALL {
+                            if ui
+                                .selectable_label(
+                                    matches!(
+                                        &self.state.model_source,
+                                        crate::state::ModelSource::ZooPreset(name) if name == preset.title()
+                                    ),
+                                    preset.title(),
+                                )
+                                .on_hover_text(preset.description())
+                                .clicked()
+                            {
+                                let _ = self.state.load_zoo_preset(preset);
+                            }
+                        }
+                    });
                 if ui.button("Open .tflite").clicked()
                     && let Some(path) = rfd::FileDialog::new()
                         .add_filter("TensorFlow Lite", &["tflite"])

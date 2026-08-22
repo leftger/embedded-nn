@@ -39,13 +39,27 @@ impl TrainView {
         ui.add_space(8.0);
 
         if state.model_source.is_imported() {
-            ui.colored_label(
-                egui::Color32::from_rgb(100, 200, 240),
-                "Training controls are disabled for imported models; the imported graph remains the source of truth.",
-            );
-            if ui.button("Switch to Studio Trainer").clicked() {
-                state.use_demo_trainer();
-            }
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(100, 200, 240),
+                        format!("Active Model Source: {}", state.model_source.display_name()),
+                    );
+                    if ui.button("⚡ Reset to Studio Trainer").clicked() {
+                        state.use_demo_trainer();
+                    }
+                });
+                ui.label("Training controls are disabled for imported/zoo models; the active graph is compiled directly to C99 and #![no_std] Rust with scheduled SRAM arena.");
+                ui.separator();
+                ui.label("Switch to another pre-architected Model Zoo Preset:");
+                ui.horizontal_wrapped(|ui| {
+                    for preset in crate::state::ModelZooPreset::ALL {
+                        if ui.button(preset.title()).on_hover_text(preset.description()).clicked() {
+                            let _ = state.load_zoo_preset(preset);
+                        }
+                    }
+                });
+            });
             return;
         }
 
