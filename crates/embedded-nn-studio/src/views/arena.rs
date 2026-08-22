@@ -18,6 +18,12 @@ struct McuSpec {
     /// exposes no reserve control; `Some(kb)` is an editable starting point sized for a
     /// typical stack configuration, not a datasheet constant.
     stack_reserve_kb: Option<usize>,
+    /// Active core current consumption at full clock frequency in mA.
+    active_ma: f32,
+    /// Sleep / standby current consumption in mA.
+    sleep_ma: f32,
+    /// Estimated clock cycles required per single INT8 multiply-accumulate on this architecture.
+    cycles_per_mac: f32,
 }
 
 impl McuSpec {
@@ -32,6 +38,84 @@ impl McuSpec {
 
 const MCU_TARGETS: &[McuSpec] = &[
     McuSpec {
+        name: "STM32WBA65RI",
+        arch: "ARM Cortex-M33 (FPU + DSP)",
+        freq_mhz: 100,
+        sram_kb: 512,
+        flash_kb: 2048,
+        rust_target: "thumbv8m.main-none-eabihf",
+        target_features: "+dsp",
+        stack_reserve_kb: Some(192),
+        active_ma: 8.5,
+        sleep_ma: 0.004,
+        cycles_per_mac: 1.0,
+    },
+    McuSpec {
+        name: "STM32H743ZI",
+        arch: "ARM Cortex-M7 Dual-Issue (480MHz)",
+        freq_mhz: 480,
+        sram_kb: 1024,
+        flash_kb: 2048,
+        rust_target: "thumbv7em-none-eabihf",
+        target_features: "+fp64",
+        stack_reserve_kb: None,
+        active_ma: 110.0,
+        sleep_ma: 0.040,
+        cycles_per_mac: 0.5,
+    },
+    McuSpec {
+        name: "nRF5340",
+        arch: "Dual ARM Cortex-M33 (BLE 5.3 Audio)",
+        freq_mhz: 128,
+        sram_kb: 512,
+        flash_kb: 1024,
+        rust_target: "thumbv8m.main-none-eabihf",
+        target_features: "+dsp",
+        stack_reserve_kb: Some(128),
+        active_ma: 6.2,
+        sleep_ma: 0.003,
+        cycles_per_mac: 1.0,
+    },
+    McuSpec {
+        name: "ESP32-S3",
+        arch: "Xtensa 32-bit LX7 Dual (Vector SIMD)",
+        freq_mhz: 240,
+        sram_kb: 512,
+        flash_kb: 8192,
+        rust_target: "xtensa-esp32s3-none-elf",
+        target_features: "",
+        stack_reserve_kb: None,
+        active_ma: 45.0,
+        sleep_ma: 0.015,
+        cycles_per_mac: 0.8,
+    },
+    McuSpec {
+        name: "RP2350",
+        arch: "Dual ARM Cortex-M33 (Pico 2)",
+        freq_mhz: 150,
+        sram_kb: 520,
+        flash_kb: 4096,
+        rust_target: "thumbv8m.main-none-eabihf",
+        target_features: "",
+        stack_reserve_kb: None,
+        active_ma: 14.0,
+        sleep_ma: 0.008,
+        cycles_per_mac: 1.2,
+    },
+    McuSpec {
+        name: "Cortex-M55 / Ethos-U55",
+        arch: "Armv8.1-M Helium + MicroNPU",
+        freq_mhz: 200,
+        sram_kb: 512,
+        flash_kb: 2048,
+        rust_target: "thumbv8.1m.main-none-eabihf",
+        target_features: "+helium,+dsp",
+        stack_reserve_kb: None,
+        active_ma: 18.0,
+        sleep_ma: 0.006,
+        cycles_per_mac: 0.2,
+    },
+    McuSpec {
         name: "STM32F401RE",
         arch: "ARM Cortex-M4F (FPU)",
         freq_mhz: 84,
@@ -40,16 +124,9 @@ const MCU_TARGETS: &[McuSpec] = &[
         rust_target: "thumbv7em-none-eabihf",
         target_features: "",
         stack_reserve_kb: None,
-    },
-    McuSpec {
-        name: "ESP32-S3",
-        arch: "Xtensa 32-bit LX7 Dual",
-        freq_mhz: 240,
-        sram_kb: 512,
-        flash_kb: 8192,
-        rust_target: "xtensa-esp32s3-none-elf",
-        target_features: "",
-        stack_reserve_kb: None,
+        active_ma: 12.0,
+        sleep_ma: 0.010,
+        cycles_per_mac: 1.5,
     },
     McuSpec {
         name: "RP2040",
@@ -60,16 +137,9 @@ const MCU_TARGETS: &[McuSpec] = &[
         rust_target: "thumbv6m-none-eabi",
         target_features: "",
         stack_reserve_kb: None,
-    },
-    McuSpec {
-        name: "RP2350",
-        arch: "Dual ARM Cortex-M33",
-        freq_mhz: 150,
-        sram_kb: 520,
-        flash_kb: 4096,
-        rust_target: "thumbv8m.main-none-eabihf",
-        target_features: "",
-        stack_reserve_kb: None,
+        active_ma: 18.0,
+        sleep_ma: 0.020,
+        cycles_per_mac: 4.0,
     },
     McuSpec {
         name: "nRF52840",
@@ -79,17 +149,10 @@ const MCU_TARGETS: &[McuSpec] = &[
         flash_kb: 1024,
         rust_target: "thumbv7em-none-eabihf",
         target_features: "",
-        stack_reserve_kb: None,
-    },
-    McuSpec {
-        name: "STM32WBA65RI",
-        arch: "ARM Cortex-M33 (FPU + DSP)",
-        freq_mhz: 100,
-        sram_kb: 512,
-        flash_kb: 2048,
-        rust_target: "thumbv8m.main-none-eabihf",
-        target_features: "+dsp",
-        stack_reserve_kb: Some(192),
+        stack_reserve_kb: Some(64),
+        active_ma: 4.8,
+        sleep_ma: 0.002,
+        cycles_per_mac: 1.5,
     },
 ];
 
@@ -141,6 +204,10 @@ pub struct ArenaView {
     /// Radio/protocol-stack SRAM reserve in KB, stored per target so editing one target's
     /// reserve and switching away preserves it (and leaves every other target untouched).
     stack_reserve_kb: Vec<usize>,
+    /// Configurable target inference rate in Hz for battery life and power simulation.
+    pub inference_rate_hz: f32,
+    /// Selected battery capacity in mAh (e.g. 220 for CR2032, 500 for LiPo).
+    pub battery_capacity_mah: f32,
 }
 
 impl Default for ArenaView {
@@ -157,6 +224,8 @@ impl ArenaView {
                 .iter()
                 .map(McuSpec::default_reserve_kb)
                 .collect(),
+            inference_rate_hz: 10.0,
+            battery_capacity_mah: 220.0,
         }
     }
 
@@ -389,6 +458,96 @@ impl ArenaView {
 
         ui.add_space(8.0);
 
+        // Hardware Power, Energy & Battery Life Estimator
+        ui.group(|ui| {
+            ui.label(
+                egui::RichText::new("🔋 Silicon Power, Energy & Battery Runtime Estimator")
+                    .strong(),
+            );
+            let total_macs = state
+                .compiled_graph
+                .as_ref()
+                .map(calculate_model_macs)
+                .unwrap_or(flash_weights.max(1));
+            let total_cycles = ((total_macs as f32) * mcu.cycles_per_mac) as u32;
+            let latency_us = total_cycles as f32 / mcu.freq_mhz as f32;
+            let latency_ms = latency_us / 1000.0;
+            let energy_uj = mcu.active_ma * 3.3 * latency_ms;
+            let max_fps = 1000.0 / latency_ms.max(0.001);
+
+            let duty_cycle = (latency_ms / 1000.0 * self.inference_rate_hz).clamp(0.0, 1.0);
+            let avg_current_ma = (duty_cycle * mcu.active_ma) + ((1.0 - duty_cycle) * mcu.sleep_ma);
+            let battery_hours = self.battery_capacity_mah / avg_current_ma.max(0.0001);
+            let battery_days = battery_hours / 24.0;
+
+            ui.horizontal(|ui| {
+                ui.label("Inference Rate:");
+                ui.add(
+                    egui::Slider::new(&mut self.inference_rate_hz, 0.1..=100.0)
+                        .suffix(" Hz")
+                        .logarithmic(true),
+                );
+                ui.separator();
+                ui.label("Battery Type:");
+                egui::ComboBox::from_id_salt("arena_battery_type_combo")
+                    .selected_text(format!("{:.0} mAh", self.battery_capacity_mah))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.battery_capacity_mah,
+                            220.0,
+                            "CR2032 Coin Cell (220 mAh)",
+                        );
+                        ui.selectable_value(&mut self.battery_capacity_mah, 500.0, "LiPo 500 mAh");
+                        ui.selectable_value(
+                            &mut self.battery_capacity_mah,
+                            1000.0,
+                            "AAA x2 Battery (1000 mAh)",
+                        );
+                        ui.selectable_value(
+                            &mut self.battery_capacity_mah,
+                            2500.0,
+                            "18650 Li-Ion (2500 mAh)",
+                        );
+                    });
+            });
+
+            ui.separator();
+            ui.columns(4, |pcols| {
+                pcols[0].label(format!("Total Complexity:\n{} MACs", total_macs));
+                pcols[1].label(format!(
+                    "Latency / Max FPS:\n{:.2} ms (~{:.0} FPS)",
+                    latency_ms, max_fps
+                ));
+                pcols[2].label(format!("Energy / Inference:\n{:.2} µJ @ 3.3V", energy_uj));
+                if battery_days >= 365.0 {
+                    pcols[3].colored_label(
+                        egui::Color32::from_rgb(80, 220, 120),
+                        format!(
+                            "Est. Battery Life:\n{:.1} Years ({:.0} Days)",
+                            battery_days / 365.0,
+                            battery_days
+                        ),
+                    );
+                } else if battery_days >= 1.0 {
+                    pcols[3].colored_label(
+                        egui::Color32::from_rgb(80, 220, 120),
+                        format!(
+                            "Est. Battery Life:\n{:.0} Days ({:.1} Months)",
+                            battery_days,
+                            battery_days / 30.0
+                        ),
+                    );
+                } else {
+                    pcols[3].colored_label(
+                        egui::Color32::from_rgb(240, 180, 60),
+                        format!("Est. Battery Life:\n{:.1} Hours", battery_hours),
+                    );
+                }
+            });
+        });
+
+        ui.add_space(8.0);
+
         // Interactive Tensor Lifetime Waterfall Map
         ui.group(|ui| {
             ui.label("📊 SRAM Buffer Lifetime Allocation Waterfall");
@@ -442,6 +601,106 @@ impl ArenaView {
     }
 }
 
+pub fn calculate_model_macs(graph: &embedded_nn_compiler::ir::ModelGraph) -> usize {
+    let mut total_macs = 0;
+    for layer in &graph.layers {
+        match &layer.op {
+            embedded_nn_compiler::ir::OpPayload::FullyConnected { weights, .. } => {
+                total_macs += weights.len();
+            }
+            embedded_nn_compiler::ir::OpPayload::Conv1D {
+                kernel_w, weights, ..
+            } => {
+                if let (Some(in_t), Some(out_t)) = (
+                    layer
+                        .inputs
+                        .first()
+                        .and_then(|id| graph.tensors.iter().find(|t| t.id == *id)),
+                    layer
+                        .outputs
+                        .first()
+                        .and_then(|id| graph.tensors.iter().find(|t| t.id == *id)),
+                ) {
+                    let out_channels =
+                        weights.len() / (kernel_w.max(&1) * in_t.shape.channels.max(1));
+                    total_macs +=
+                        out_t.shape.width * out_channels * (kernel_w * in_t.shape.channels);
+                } else {
+                    total_macs += weights.len();
+                }
+            }
+            embedded_nn_compiler::ir::OpPayload::Conv2D {
+                kernel_h,
+                kernel_w,
+                weights,
+                ..
+            } => {
+                if let (Some(in_t), Some(out_t)) = (
+                    layer
+                        .inputs
+                        .first()
+                        .and_then(|id| graph.tensors.iter().find(|t| t.id == *id)),
+                    layer
+                        .outputs
+                        .first()
+                        .and_then(|id| graph.tensors.iter().find(|t| t.id == *id)),
+                ) {
+                    let out_channels = weights.len()
+                        / (kernel_h.max(&1) * kernel_w.max(&1) * in_t.shape.channels.max(1));
+                    total_macs += out_t.shape.height
+                        * out_t.shape.width
+                        * out_channels
+                        * (kernel_h * kernel_w * in_t.shape.channels);
+                } else {
+                    total_macs += weights.len();
+                }
+            }
+            embedded_nn_compiler::ir::OpPayload::DepthwiseConv2D {
+                kernel_h,
+                kernel_w,
+                ch_mult,
+                ..
+            } => {
+                if let (Some(in_t), Some(out_t)) = (
+                    layer
+                        .inputs
+                        .first()
+                        .and_then(|id| graph.tensors.iter().find(|t| t.id == *id)),
+                    layer
+                        .outputs
+                        .first()
+                        .and_then(|id| graph.tensors.iter().find(|t| t.id == *id)),
+                ) {
+                    total_macs += out_t.shape.height
+                        * out_t.shape.width
+                        * in_t.shape.channels
+                        * ch_mult
+                        * (kernel_h * kernel_w);
+                }
+            }
+            embedded_nn_compiler::ir::OpPayload::Svdf {
+                rank,
+                memory_size,
+                weights_feature,
+                ..
+            } => {
+                if let Some(in_t) = layer
+                    .inputs
+                    .first()
+                    .and_then(|id| graph.tensors.iter().find(|t| t.id == *id))
+                {
+                    let units = weights_feature.len() / (rank * in_t.shape.total_elements().max(1));
+                    total_macs += units * (rank * in_t.shape.total_elements() + rank * memory_size);
+                } else {
+                    total_macs += weights_feature.len();
+                }
+            }
+            _ => {}
+        }
+    }
+    total_macs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,7 +736,7 @@ mod tests {
 
     #[test]
     fn targets_without_a_radio_stack_reserve_nothing() {
-        for target in MCU_TARGETS.iter().filter(|t| t.name != "STM32WBA65RI") {
+        for target in MCU_TARGETS.iter().filter(|t| t.stack_reserve_kb.is_none()) {
             assert_eq!(
                 target.default_reserve_kb(),
                 0,

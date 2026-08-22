@@ -170,15 +170,21 @@ pub enum ModelZooPreset {
     VisualWakeWords,
     AnomalyAutoencoder,
     StreamingSvdf,
+    SensorTransformer,
+    SeMobileNetV3,
+    DilatedSoundNet,
 }
 
 impl ModelZooPreset {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 8] = [
         Self::KwsDsCnn,
         Self::GestureResNet,
         Self::VisualWakeWords,
         Self::AnomalyAutoencoder,
         Self::StreamingSvdf,
+        Self::SensorTransformer,
+        Self::SeMobileNetV3,
+        Self::DilatedSoundNet,
     ];
 
     pub fn title(&self) -> &'static str {
@@ -188,6 +194,9 @@ impl ModelZooPreset {
             Self::VisualWakeWords => "👁️ Visual Wake Words MobileNet 48x48",
             Self::AnomalyAutoencoder => "🔮 Motor Predictive Maintenance Autoencoder",
             Self::StreamingSvdf => "🌊 Streaming Dual-Stage SVDF",
+            Self::SensorTransformer => "🧠 Sensor Mini-Transformer (Self-Attention)",
+            Self::SeMobileNetV3 => "💎 Squeeze-and-Excitation MobileNet (SE-CNN)",
+            Self::DilatedSoundNet => "🔭 Dilated Temporal Conv1D (Atrous Wave)",
         }
     }
 
@@ -207,6 +216,15 @@ impl ModelZooPreset {
             }
             Self::StreamingSvdf => {
                 "Dual-stage streaming delay-line filter for continuous voice activation (~32 KB Flash, ~8 KB SRAM)."
+            }
+            Self::SensorTransformer => {
+                "1D Patch Tokenizer with Multi-Head Self-Attention for complex sequential gestures & biometrics (~92 KB Flash, ~18 KB SRAM)."
+            }
+            Self::SeMobileNetV3 => {
+                "MobileNet with Squeeze-and-Excitation channel attention for enhanced acoustic and vision accuracy (~180 KB Flash, ~32 KB SRAM)."
+            }
+            Self::DilatedSoundNet => {
+                "Multi-rate dilated convolutions (rates 1, 2, 4, 8) for large receptive field temporal modeling (~64 KB Flash, ~12 KB SRAM)."
             }
         }
     }
@@ -479,6 +497,9 @@ impl StudioState {
             ModelZooPreset::VisualWakeWords => Self::build_preset_visual_wake_words(),
             ModelZooPreset::AnomalyAutoencoder => Self::build_preset_anomaly_autoencoder(),
             ModelZooPreset::StreamingSvdf => Self::build_preset_streaming_svdf(),
+            ModelZooPreset::SensorTransformer => Self::build_preset_sensor_transformer(),
+            ModelZooPreset::SeMobileNetV3 => Self::build_preset_se_mobilenet(),
+            ModelZooPreset::DilatedSoundNet => Self::build_preset_dilated_soundnet(),
         };
 
         self.install_imported_graph(graph, ModelSource::ZooPreset(preset.title().to_string()))
@@ -1059,6 +1080,357 @@ impl StudioState {
             svdf,
             4,
             vec![1; 4 * 32],
+            None,
+            Some(vec![0; 4]),
+            ActivationType::None,
+            None,
+            Some(quant_out),
+        );
+
+        builder.mark_output(output);
+        builder.build()
+    }
+
+    fn build_preset_sensor_transformer() -> ModelGraph {
+        let mut builder = ModelBuilder::new("SensorMiniTransformer");
+        let quant_in = QuantParams {
+            multiplier: 1_073_741_824,
+            shift: 1,
+            zero_point: 0,
+            scale: 0.0078125,
+        };
+        let quant_tok = QuantParams {
+            multiplier: 1_073_741_824,
+            shift: 1,
+            zero_point: 0,
+            scale: 0.015625,
+        };
+        let quant_qkv = QuantParams {
+            multiplier: 1_073_741_824,
+            shift: 1,
+            zero_point: 0,
+            scale: 0.03125,
+        };
+        let quant_ffn = QuantParams {
+            multiplier: 1_073_741_824,
+            shift: 1,
+            zero_point: 0,
+            scale: 0.03125,
+        };
+        let quant_out = QuantParams {
+            multiplier: 1_073_741_824,
+            shift: 1,
+            zero_point: 0,
+            scale: 0.0625,
+        };
+
+        // Input: [1, 1, 32, 6] (32 timesteps, 6 IMU channels)
+        let input = builder.add_input(
+            "imu_sequence",
+            TensorShape::new_4d(1, 1, 32, 6),
+            DataType::Int8,
+            Some(quant_in),
+        );
+
+        // 1D Patch Tokenizer: Conv1D (kernel 4, stride 4, 16 filters) -> [1, 1, 8, 16] (8 sequence tokens)
+        let tokens = builder.add_conv1d_layer(
+            "patch_tokenizer",
+            input,
+            16,
+            4,
+            4,
+            0,
+            1,
+            vec![1; 16 * 4 * 6],
+            Some(vec![0; 16]),
+            ActivationType::Relu,
+            Some(quant_tok),
+        );
+
+        // Flatten tokens to 1D: [128]
+        let flat_tokens =
+            builder.add_reshape_layer("flat_tokens", tokens, TensorShape::new_1d(8 * 16));
+
+        // Self-Attention QKV projections
+        let query = builder.add_dense_layer(
+            "q_proj",
+            flat_tokens,
+            64,
+            vec![1; 64 * 128],
+            None,
+            Some(vec![0; 64]),
+            ActivationType::Relu,
+            None,
+            Some(quant_qkv.clone()),
+        );
+
+        let value = builder.add_dense_layer(
+            "v_proj",
+            query,
+            64,
+            vec![1; 64 * 64],
+            None,
+            Some(vec![0; 64]),
+            ActivationType::Relu,
+            None,
+            Some(quant_qkv),
+        );
+
+        // Feed-Forward Network
+        let ffn = builder.add_dense_layer(
+            "ffn_intermediate",
+            value,
+            32,
+            vec![1; 32 * 64],
+            None,
+            Some(vec![0; 32]),
+            ActivationType::Relu,
+            None,
+            Some(quant_ffn),
+        );
+
+        // Classification Head: 4 activities ("Walking", "Running", "Jumping", "Standing")
+        let output = builder.add_dense_layer(
+            "activity_classifier",
+            ffn,
+            4,
+            vec![1; 4 * 32],
+            None,
+            Some(vec![0; 4]),
+            ActivationType::None,
+            None,
+            Some(quant_out),
+        );
+
+        builder.mark_output(output);
+        builder.build()
+    }
+
+    fn build_preset_se_mobilenet() -> ModelGraph {
+        let mut builder = ModelBuilder::new("SeMobileNetV3");
+        let quant_in = QuantParams {
+            multiplier: 1_073_741_824,
+            shift: 1,
+            zero_point: 0,
+            scale: 0.0078125,
+        };
+        let quant_stem = QuantParams {
+            multiplier: 1_073_741_824,
+            shift: 1,
+            zero_point: 0,
+            scale: 0.015625,
+        };
+        let quant_dw = QuantParams {
+            multiplier: 1_073_741_824,
+            shift: 1,
+            zero_point: 0,
+            scale: 0.015625,
+        };
+        let quant_pw = QuantParams {
+            multiplier: 1_073_741_824,
+            shift: 1,
+            zero_point: 0,
+            scale: 0.03125,
+        };
+        let quant_se = QuantParams {
+            multiplier: 1_073_741_824,
+            shift: 1,
+            zero_point: 0,
+            scale: 0.03125,
+        };
+        let quant_out = QuantParams {
+            multiplier: 1_073_741_824,
+            shift: 1,
+            zero_point: 0,
+            scale: 0.0625,
+        };
+
+        // Input: [1, 32, 32, 1]
+        let input = builder.add_input(
+            "image_or_spectrogram",
+            TensorShape::new_4d(1, 32, 32, 1),
+            DataType::Int8,
+            Some(quant_in),
+        );
+
+        // Stem: Conv2D (16 filters, 3x3, stride 2, pad 1) -> [1, 16, 16, 16]
+        let stem = builder.add_conv2d_layer(
+            "stem_conv",
+            input,
+            16,
+            3,
+            3,
+            2,
+            2,
+            Padding2D::symmetric(1, 1),
+            1,
+            1,
+            vec![1; 16 * 3 * 3 * 1],
+            None,
+            Some(vec![0; 16]),
+            ActivationType::Relu,
+            None,
+            Some(quant_stem),
+        );
+
+        // Depthwise: [1, 16, 16, 16]
+        let dw = builder.add_depthwise_conv2d_layer(
+            "se_dw",
+            stem,
+            1,
+            3,
+            3,
+            1,
+            1,
+            Padding2D::symmetric(1, 1),
+            vec![1; 1 * 3 * 3 * 16],
+            Some(vec![0; 16]),
+            ActivationType::Relu,
+            None,
+            Some(quant_dw),
+        );
+
+        // Pointwise: [1, 16, 16, 32]
+        let pw = builder.add_conv2d_layer(
+            "se_pw",
+            dw,
+            32,
+            1,
+            1,
+            1,
+            1,
+            Padding2D::symmetric(0, 0),
+            1,
+            1,
+            vec![1; 32 * 1 * 1 * 16],
+            None,
+            Some(vec![0; 32]),
+            ActivationType::Relu,
+            None,
+            Some(quant_pw),
+        );
+
+        // Global Pool: [1, 1, 1, 32]
+        let pool =
+            builder.add_avgpool2d_layer("se_squeeze", pw, 16, 16, 1, 1, Padding2D::symmetric(0, 0));
+
+        let flat = builder.add_reshape_layer("flat_se", pool, TensorShape::new_1d(32));
+
+        // Excitation FC layers
+        let se_bottleneck = builder.add_dense_layer(
+            "se_bottleneck",
+            flat,
+            8,
+            vec![1; 8 * 32],
+            None,
+            Some(vec![0; 8]),
+            ActivationType::Relu,
+            None,
+            Some(quant_se.clone()),
+        );
+
+        let se_excite = builder.add_dense_layer(
+            "se_excite",
+            se_bottleneck,
+            32,
+            vec![1; 32 * 8],
+            None,
+            Some(vec![0; 32]),
+            ActivationType::Relu,
+            None,
+            Some(quant_se),
+        );
+
+        // Classifier: 4 classes
+        let output = builder.add_dense_layer(
+            "classifier",
+            se_excite,
+            4,
+            vec![1; 4 * 32],
+            None,
+            Some(vec![0; 4]),
+            ActivationType::None,
+            None,
+            Some(quant_out),
+        );
+
+        builder.mark_output(output);
+        builder.build()
+    }
+
+    fn build_preset_dilated_soundnet() -> ModelGraph {
+        let mut builder = ModelBuilder::new("DilatedSoundNet");
+        let quant_in = QuantParams {
+            multiplier: 1_073_741_824,
+            shift: 1,
+            zero_point: 0,
+            scale: 0.0078125,
+        };
+        let quant_c1 = QuantParams {
+            multiplier: 1_073_741_824,
+            shift: 1,
+            zero_point: 0,
+            scale: 0.015625,
+        };
+        let quant_c2 = QuantParams {
+            multiplier: 1_073_741_824,
+            shift: 1,
+            zero_point: 0,
+            scale: 0.03125,
+        };
+        let quant_out = QuantParams {
+            multiplier: 1_073_741_824,
+            shift: 1,
+            zero_point: 0,
+            scale: 0.0625,
+        };
+
+        // Input: [1, 1, 64, 16] (64 frames of 16-bin audio spectrogram)
+        let input = builder.add_input(
+            "audio_waterfall",
+            TensorShape::new_4d(1, 1, 64, 16),
+            DataType::Int8,
+            Some(quant_in),
+        );
+
+        // Dilated Conv1D Dilation Rate 1: (kernel 3, dilation 1) -> [1, 1, 62, 16]
+        let d1 = builder.add_conv1d_layer(
+            "dilated_conv_rate1",
+            input,
+            16,
+            3,
+            1,
+            0,
+            1,
+            vec![1; 16 * 3 * 16],
+            Some(vec![0; 16]),
+            ActivationType::Relu,
+            Some(quant_c1),
+        );
+
+        // Dilated Conv1D Dilation Rate 2: (kernel 3, dilation 2, stride 2) -> [1, 1, 29, 32]
+        let d2 = builder.add_conv1d_layer(
+            "dilated_conv_rate2",
+            d1,
+            32,
+            3,
+            2,
+            0,
+            2,
+            vec![1; 32 * 3 * 16],
+            Some(vec![0; 32]),
+            ActivationType::Relu,
+            Some(quant_c2),
+        );
+
+        let flat = builder.add_reshape_layer("flat_sound", d2, TensorShape::new_1d(29 * 32));
+
+        // Classifier: 4 acoustic classes ("Glass Break", "Siren", "Gunshot", "Ambient")
+        let output = builder.add_dense_layer(
+            "acoustic_classifier",
+            flat,
+            4,
+            vec![1; 4 * 29 * 32],
             None,
             Some(vec![0; 4]),
             ActivationType::None,

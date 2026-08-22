@@ -327,5 +327,54 @@ impl DspView {
                 }
             });
         });
+
+        ui.add_space(8.0);
+
+        // 2D Temporal Spectrogram Waterfall Heatmap
+        ui.group(|ui| {
+            ui.label(egui::RichText::new("🌊 2D Temporal Mel-Spectrogram Heatmap Matrix [Time × Frequency]").strong());
+            ui.label("Visualizes the complete temporal-spectral feature matrix fed directly to 2D CNN and Temporal ResNet architectures:");
+
+            if let Some(s) = &active_sample && !s.frames.is_empty() {
+                let num_frames = s.frames.len();
+                let num_bins = s.frames[0].len();
+
+                let (rect, _resp) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 130.0),
+                    egui::Sense::hover(),
+                );
+                let painter = ui.painter_at(rect);
+                painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(12, 14, 20));
+
+                let cell_w = rect.width() / num_frames as f32;
+                let cell_h = rect.height() / num_bins as f32;
+
+                for (t, frame) in s.frames.iter().enumerate() {
+                    for (f, &val) in frame.iter().enumerate() {
+                        let cell_rect = egui::Rect::from_min_size(
+                            egui::pos2(
+                                rect.left() + (t as f32) * cell_w,
+                                rect.bottom() - ((f + 1) as f32) * cell_h,
+                            ),
+                            egui::vec2(cell_w.max(1.0), cell_h.max(1.0)),
+                        );
+
+                        // Magma/Turbo gradient: dark purple -> magenta -> orange -> bright yellow
+                        let norm = val.clamp(0.0, 1.0);
+                        let r = ((norm * 2.2).clamp(0.0, 1.0) * 255.0) as u8;
+                        let g = ((norm * 1.6 - 0.2).clamp(0.0, 1.0) * 255.0) as u8;
+                        let b = (((1.0 - norm) * 1.4).clamp(0.0, 1.0) * 255.0) as u8;
+
+                        painter.rect_filled(
+                            cell_rect,
+                            0.0,
+                            egui::Color32::from_rgb(r, g, b),
+                        );
+                    }
+                }
+            } else {
+                ui.label("No active sample or frames extracted.");
+            }
+        });
     }
 }
