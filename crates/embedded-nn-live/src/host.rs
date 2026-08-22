@@ -430,6 +430,13 @@ pub enum OwnedMsg {
         code: u16,
     },
     Pong,
+    LayerProfile {
+        seq: u32,
+        layer_idx: u8,
+        total_layers: u8,
+        execution_cycles: u32,
+        activations: Vec<u8>,
+    },
 }
 
 impl OwnedMsg {
@@ -495,6 +502,19 @@ impl OwnedMsg {
             },
             Msg::Nack { seq, code } => Self::Nack { seq, code },
             Msg::Pong => Self::Pong,
+            Msg::LayerProfile {
+                seq,
+                layer_idx,
+                total_layers,
+                execution_cycles,
+                activations,
+            } => Self::LayerProfile {
+                seq,
+                layer_idx,
+                total_layers,
+                execution_cycles,
+                activations: activations.to_vec(),
+            },
         }
     }
 
@@ -563,6 +583,19 @@ impl OwnedMsg {
                 code: *code,
             },
             Self::Pong => Msg::Pong,
+            Self::LayerProfile {
+                seq,
+                layer_idx,
+                total_layers,
+                execution_cycles,
+                activations,
+            } => Msg::LayerProfile {
+                seq: *seq,
+                layer_idx: *layer_idx,
+                total_layers: *total_layers,
+                execution_cycles: *execution_cycles,
+                activations,
+            },
         }
     }
 

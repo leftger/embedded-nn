@@ -3,7 +3,9 @@ use crate::theme::configure_theme;
 use crate::views::arena::ArenaView;
 use crate::views::codegen::CodegenView;
 use crate::views::dsp::DspView;
+use crate::views::gesture_3d::Gesture3DView;
 use crate::views::ingest::IngestView;
+use crate::views::live_inspector::LiveInspectorView;
 use crate::views::train::TrainView;
 use eframe::egui;
 use embedded_nn_live::host::DeviceLink;
@@ -12,20 +14,24 @@ use std::time::Duration;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StudioTab {
     Ingest,
+    Gesture3D,
     Dsp,
     Train,
     Arena,
     Codegen,
+    Inspector,
 }
 
 pub struct EmbeddedNnStudioApp {
     pub current_tab: StudioTab,
     pub state: StudioState,
     pub ingest_view: IngestView,
+    pub gesture_view: Gesture3DView,
     pub dsp_view: DspView,
     pub train_view: TrainView,
     pub arena_view: ArenaView,
     pub codegen_view: CodegenView,
+    pub inspector_view: LiveInspectorView,
     pub device_link: Option<DeviceLink>,
 }
 
@@ -35,10 +41,12 @@ impl Default for EmbeddedNnStudioApp {
             current_tab: StudioTab::Ingest,
             state: StudioState::default(),
             ingest_view: IngestView::new(),
+            gesture_view: Gesture3DView::new(),
             dsp_view: DspView::new(),
             train_view: TrainView::new(),
             arena_view: ArenaView::new(),
             codegen_view: CodegenView::new(),
+            inspector_view: LiveInspectorView::new(),
             device_link: None,
         }
     }
@@ -100,20 +108,26 @@ impl eframe::App for EmbeddedNnStudioApp {
                     .unwrap_or(0);
 
                 let tab_1_label = format!("1. Ingest ({} samples)", sample_count);
-                let tab_2_label = format!("2. DSP ({} bins)", mel_bins);
-                let tab_3_label = format!("3. Train ({:.0}% acc)", latest_acc);
-                let tab_4_label = format!("4. Arena ({} B)", arena_bytes);
-                let tab_5_label = "5. Rust Codegen & HIL".to_string();
+                let tab_2_label = "2. 🌐 3D Gesture".to_string();
+                let tab_3_label = format!("3. DSP ({} bins)", mel_bins);
+                let tab_4_label = format!("4. Train ({:.0}% acc)", latest_acc);
+                let tab_5_label = format!("5. Arena ({} B)", arena_bytes);
+                let tab_6_label = "6. Codegen".to_string();
+                let tab_7_label = "7. 🔬 Live Inspector".to_string();
 
                 ui.selectable_value(&mut self.current_tab, StudioTab::Ingest, tab_1_label);
                 ui.label("➔");
-                ui.selectable_value(&mut self.current_tab, StudioTab::Dsp, tab_2_label);
+                ui.selectable_value(&mut self.current_tab, StudioTab::Gesture3D, tab_2_label);
                 ui.label("➔");
-                ui.selectable_value(&mut self.current_tab, StudioTab::Train, tab_3_label);
+                ui.selectable_value(&mut self.current_tab, StudioTab::Dsp, tab_3_label);
                 ui.label("➔");
-                ui.selectable_value(&mut self.current_tab, StudioTab::Arena, tab_4_label);
+                ui.selectable_value(&mut self.current_tab, StudioTab::Train, tab_4_label);
                 ui.label("➔");
-                ui.selectable_value(&mut self.current_tab, StudioTab::Codegen, tab_5_label);
+                ui.selectable_value(&mut self.current_tab, StudioTab::Arena, tab_5_label);
+                ui.label("➔");
+                ui.selectable_value(&mut self.current_tab, StudioTab::Codegen, tab_6_label);
+                ui.label("➔");
+                ui.selectable_value(&mut self.current_tab, StudioTab::Inspector, tab_7_label);
             });
         });
 
@@ -121,6 +135,31 @@ impl eframe::App for EmbeddedNnStudioApp {
             StudioTab::Ingest => self
                 .ingest_view
                 .show(ui, &mut self.state, &mut self.device_link),
+            StudioTab::Gesture3D => {
+                let trajectory: Vec<[f32; 3]> = if let Some(sample) = self.state.samples.first() {
+                    if sample.raw_waveform.len() >= 3 && sample.raw_waveform.len() % 3 == 0 {
+                        sample
+                            .raw_waveform
+                            .chunks_exact(3)
+                            .map(|c| [c[0], c[1], c[2]])
+                            .collect()
+                    } else {
+                        // Generate 3-axis projection from scalar magnitude
+                        sample
+                            .raw_waveform
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &m)| {
+                                let phase = i as f32 * 0.1;
+                                [m * phase.cos(), m * phase.sin(), m]
+                            })
+                            .collect()
+                    }
+                } else {
+                    Vec::new()
+                };
+                self.gesture_view.ui(ui, &trajectory);
+            }
             StudioTab::Dsp => self.dsp_view.show(ui, &mut self.state),
             StudioTab::Train => self.train_view.show(ui, &mut self.state),
             StudioTab::Arena => self.arena_view.show(ui, &mut self.state),
@@ -128,11 +167,16 @@ impl eframe::App for EmbeddedNnStudioApp {
                 self.codegen_view
                     .show(ui, &mut self.state, self.device_link.as_ref())
             }
+            StudioTab::Inspector => {
+                self.inspector_view.ui(ui, &mut self.device_link);
+            }
         });
 
         // Request continuous repaint for smooth 60 FPS live oscilloscope stream and training progress
         if self.current_tab == StudioTab::Ingest
+            || self.current_tab == StudioTab::Gesture3D
             || self.current_tab == StudioTab::Codegen
+            || self.current_tab == StudioTab::Inspector
             || self.state.is_training
             || self.ingest_view.is_recording
             || self

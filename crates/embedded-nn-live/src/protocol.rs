@@ -43,6 +43,7 @@ const T_INFERENCE_RESULT: u8 = 0x82;
 const T_SENSOR: u8 = 0x83;
 const T_NACK: u8 = 0x84;
 const T_PONG: u8 = 0x85;
+const T_LAYER_PROFILE: u8 = 0x86;
 
 /// Fixed fields of [`Msg::Hello`] / the first part of [`Msg::Ready`].
 pub const HELLO_PAYLOAD_LEN: usize = 14;
@@ -54,6 +55,8 @@ pub const RUN_INFERENCE_HEADER: usize = 8;
 pub const INFERENCE_RESULT_HEADER: usize = 16;
 /// timestamp_ms + channel_count before f32 samples.
 pub const SENSOR_HEADER: usize = 5;
+/// seq + layer_idx + total_layers + cycles before activations.
+pub const LAYER_PROFILE_HEADER: usize = 10;
 
 /// A decoded protocol message. Tensor and sensor payloads borrow from the
 /// decoder (or caller) buffer to stay allocation-free on the device.
@@ -100,6 +103,13 @@ pub enum Msg<'a> {
         code: u16,
     },
     Pong,
+    LayerProfile {
+        seq: u32,
+        layer_idx: u8,
+        total_layers: u8,
+        execution_cycles: u32,
+        activations: &'a [u8],
+    },
 }
 
 /// Well-known [`Msg::Nack`] codes.
@@ -141,6 +151,7 @@ impl<'a> Msg<'a> {
             Msg::SensorFrame { .. } => T_SENSOR,
             Msg::Nack { .. } => T_NACK,
             Msg::Pong => T_PONG,
+            Msg::LayerProfile { .. } => T_LAYER_PROFILE,
         }
     }
 
@@ -154,6 +165,7 @@ impl<'a> Msg<'a> {
             Msg::InferenceResult { logits, .. } => INFERENCE_RESULT_HEADER + logits.len(),
             Msg::SensorFrame { values, .. } => SENSOR_HEADER + values.len(),
             Msg::Nack { .. } => 6,
+            Msg::LayerProfile { activations, .. } => LAYER_PROFILE_HEADER + activations.len(),
         }
     }
 
@@ -262,6 +274,19 @@ impl<'a> Msg<'a> {
                 body[0..4].copy_from_slice(&seq.to_le_bytes());
                 body[4..6].copy_from_slice(&code.to_le_bytes());
             }
+            Msg::LayerProfile {
+                seq,
+                layer_idx,
+                total_layers,
+                execution_cycles,
+                activations,
+            } => {
+                body[0..4].copy_from_slice(&seq.to_le_bytes());
+                body[4] = layer_idx;
+                body[5] = total_layers;
+                body[6..10].copy_from_slice(&execution_cycles.to_le_bytes());
+                body[10..10 + activations.len()].copy_from_slice(activations);
+            }
         }
     }
 }
@@ -347,6 +372,18 @@ fn parse(msg_type: u8, body: &[u8]) -> Result<Msg<'_>, DecodeError> {
                 return Err(DecodeError::BadLength);
             }
             Ok(Msg::Pong)
+        }
+        T_LAYER_PROFILE => {
+            if body.len() < LAYER_PROFILE_HEADER {
+                return Err(DecodeError::BadLength);
+            }
+            Ok(Msg::LayerProfile {
+                seq: u32le(&body[0..4]),
+                layer_idx: body[4],
+                total_layers: body[5],
+                execution_cycles: u32le(&body[6..10]),
+                activations: &body[10..],
+            })
         }
         other => Err(DecodeError::UnknownType(other)),
     }
@@ -632,6 +669,13 @@ mod tests {
         },
         Ping,
         Pong,
+        LayerProfile {
+            seq: u32,
+            layer_idx: u8,
+            total_layers: u8,
+            execution_cycles: u32,
+            activations: Vec<u8>,
+        },
     }
 
     fn owned(msg: &Msg<'_>) -> Owned {
@@ -696,6 +740,19 @@ mod tests {
             Msg::Nack { seq, code } => Owned::Nack { seq, code },
             Msg::Ping => Owned::Ping,
             Msg::Pong => Owned::Pong,
+            Msg::LayerProfile {
+                seq,
+                layer_idx,
+                total_layers,
+                execution_cycles,
+                activations,
+            } => Owned::LayerProfile {
+                seq,
+                layer_idx,
+                total_layers,
+                execution_cycles,
+                activations: activations.to_vec(),
+            },
         }
     }
 
@@ -718,8 +775,15 @@ mod tests {
         roundtrip(Msg::Ping);
         roundtrip(Msg::Pong);
         roundtrip(Msg::Nack {
-            seq: 9,
-            code: NackCode::BadInputLen as u16,
+            seq: 3,
+            code: NackCode::Malformed as u16,
+        });
+        roundtrip(Msg::LayerProfile {
+            seq: 4,
+            layer_idx: 1,
+            total_layers: 3,
+            execution_cycles: 4200,
+            activations: &[10, 236, 30, 216, 50],
         });
         roundtrip(Msg::RunInference {
             seq: 3,
