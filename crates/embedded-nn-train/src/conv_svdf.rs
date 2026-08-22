@@ -276,7 +276,6 @@ fn train_conv1d(features: &[Vec<f32>], labels: &[usize], config: &TrainConfig) -
         .with_grad_clipping(Some(GradientClippingConfig::Norm(1.0)))
         .init::<TrainB, ConvNet>();
     let loss_fn = CrossEntropyLossConfig::new().init(&device);
-    let fake = config.mode == TrainMode::Qat;
     let mut final_loss = 0.0f32;
 
     let flat_features: Vec<f32> = features.iter().flat_map(|f| f.iter().copied()).collect();

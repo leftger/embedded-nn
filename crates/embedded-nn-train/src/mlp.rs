@@ -231,7 +231,6 @@ pub fn train_dense_mlp(
         .with_grad_clipping(Some(GradientClippingConfig::Norm(1.0)))
         .init();
     let loss_fn = CrossEntropyLossConfig::new().init(&device);
-    let fake_quant = config.mode == TrainMode::Qat;
     let mut final_loss = 0.0f32;
 
     let flat_features: Vec<f32> = features.iter().flat_map(|f| f.iter().copied()).collect();
@@ -369,5 +368,88 @@ mod tests {
         let mut host = HostInterpreter::new(&report.graph).unwrap();
         let q = quantize_features(&x);
         let _ = host.run(&[&q[0]]).unwrap();
+    }
+
+    #[test]
+    fn test_burn_ptq_and_qat_accuracy_convergence_on_multiclass_dataset() {
+        // Linearly separable 3-class dataset with 12 samples
+        let x = vec![
+            vec![1.0f32, 0.0, 0.0],
+            vec![0.9, 0.1, 0.0],
+            vec![1.1, -0.1, 0.0],
+            vec![1.0, 0.2, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.1, 0.9, 0.0],
+            vec![-0.1, 1.1, 0.0],
+            vec![0.0, 1.0, 0.2],
+            vec![0.0, 0.0, 1.0],
+            vec![0.0, 0.1, 0.9],
+            vec![0.0, -0.1, 1.1],
+            vec![0.2, 0.0, 1.0],
+        ];
+        let y = vec![0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2];
+
+        // PTQ Convergence
+        let report_ptq = train_dense_mlp(
+            &x,
+            &y,
+            &TrainConfig {
+                num_inputs: 3,
+                hidden: 8,
+                num_classes: 3,
+                learning_rate: 0.02,
+                epochs: 60,
+                mode: TrainMode::Ptq,
+                arch: TrainArch::DenseMlp,
+            },
+        );
+        assert!(
+            report_ptq.final_loss < 0.55,
+            "PTQ loss must converge, got {}",
+            report_ptq.final_loss
+        );
+
+        // QAT Convergence with STE
+        let report_qat = train_dense_mlp(
+            &x,
+            &y,
+            &TrainConfig {
+                num_inputs: 3,
+                hidden: 8,
+                num_classes: 3,
+                learning_rate: 0.02,
+                epochs: 60,
+                mode: TrainMode::Qat,
+                arch: TrainArch::DenseMlp,
+            },
+        );
+        assert!(
+            report_qat.final_loss < 0.55,
+            "QAT loss must converge, got {}",
+            report_qat.final_loss
+        );
+
+        // Verify host integer interpreter reaches >= 90% accuracy on quantized graph
+        let mut host = HostInterpreter::new(&report_qat.graph).unwrap();
+        let q = quantize_features(&x);
+        let mut correct = 0;
+        for (sample, &target) in q.iter().zip(y.iter()) {
+            let out = host.run(&[sample.as_slice()]).unwrap();
+            let pred = out[0]
+                .iter()
+                .enumerate()
+                .max_by_key(|&(_, v)| *v)
+                .unwrap()
+                .0;
+            if pred == target {
+                correct += 1;
+            }
+        }
+        let acc = (correct as f32 / y.len() as f32) * 100.0;
+        assert!(
+            acc >= 90.0,
+            "QAT quantized integer accuracy must be >= 90%, got {}%",
+            acc
+        );
     }
 }

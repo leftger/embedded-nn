@@ -1241,8 +1241,8 @@ impl StudioState {
                 num_inputs,
                 hidden: self.model_config.hidden_units,
                 num_classes: self.classes.len(),
-                learning_rate: (self.model_config.learning_rate as f64 * 0.25).clamp(0.001, 0.008),
-                epochs: self.model_config.epochs.max(50),
+                learning_rate: (self.model_config.learning_rate as f64).clamp(0.01, 0.05),
+                epochs: self.model_config.epochs.max(60),
                 mode: if qat {
                     embedded_nn_train::TrainMode::Qat
                 } else {
@@ -2101,5 +2101,42 @@ mod tests {
         state.compare_imported_tflite_golden();
         let status = state.golden_status.expect("status");
         assert!(status.starts_with("Pass:"), "{status}");
+    }
+
+    #[test]
+    fn test_run_burn_training_ptq_and_qat_accuracy_regression() {
+        let mut state = StudioState::default();
+        state.model_config.enable_augmentation = false;
+        state.model_config.epochs = 60;
+
+        // Test Burn PTQ
+        state.run_burn_training(false);
+        let ptq_loss = *state.train_loss_history.last().expect("loss history");
+        let ptq_acc = *state.val_acc_history.last().expect("acc history");
+        assert!(
+            ptq_loss < 0.65,
+            "Burn PTQ loss must be < 0.65, got {}",
+            ptq_loss
+        );
+        assert!(
+            ptq_acc >= 70.0,
+            "Burn PTQ accuracy must be >= 70%, got {}%",
+            ptq_acc
+        );
+
+        // Test Burn QAT
+        state.run_burn_training(true);
+        let qat_loss = *state.train_loss_history.last().expect("loss history");
+        let qat_acc = *state.val_acc_history.last().expect("acc history");
+        assert!(
+            qat_loss < 0.65,
+            "Burn QAT loss must be < 0.65, got {}",
+            qat_loss
+        );
+        assert!(
+            qat_acc >= 70.0,
+            "Burn QAT accuracy must be >= 70%, got {}%",
+            qat_acc
+        );
     }
 }
