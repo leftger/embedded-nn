@@ -2,6 +2,8 @@ use crate::state::StudioState;
 use crate::syntax::highlight_rust;
 use eframe::egui;
 use embedded_nn_live::host::{DeviceLink, OwnedMsg};
+#[cfg_attr(target_arch = "wasm32", allow(unused_imports))]
+#[allow(unused_imports)]
 use std::path::Path;
 
 /// Inner/outer margins of an `egui` group frame, which shrink the space usable by its contents.

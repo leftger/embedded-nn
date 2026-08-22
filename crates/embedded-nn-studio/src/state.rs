@@ -307,6 +307,7 @@ impl Default for StudioState {
 }
 
 impl StudioState {
+    #[allow(dead_code)]
     pub fn production_export_eligible(&self) -> bool {
         true
     }
@@ -535,7 +536,7 @@ impl StudioState {
 
         // If raw is 3D interleaved [ax, ay, az], compute vector magnitude per timestep
         let signal: Vec<f32> =
-            if raw.len() >= 3 && raw.len() % 3 == 0 && raw.len() > dsp.capture_samples as usize {
+            if raw.len() >= 3 && raw.len().is_multiple_of(3) && raw.len() > dsp.capture_samples {
                 raw.chunks_exact(3)
                     .map(|c| (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt())
                     .collect()

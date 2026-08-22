@@ -155,10 +155,7 @@ make
 /// Generates a standalone `#![no_std]` Rust crate bundle.
 pub fn generate_rust_crate_bundle(model_name: &str, graph: &ModelGraph) -> Vec<BundleFile> {
     let mut files = Vec::new();
-    let name_lower = model_name
-        .to_lowercase()
-        .replace(' ', "_")
-        .replace('-', "_");
+    let name_lower = model_name.to_lowercase().replace([' ', '-'], "_");
 
     let rust_code = RustCodeGenerator::new(model_name).generate(graph);
 

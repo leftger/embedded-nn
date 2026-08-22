@@ -22,72 +22,68 @@ pub struct ParetoCandidate {
 
 /// Runs a fast multi-architecture sweep and identifies the Pareto-optimal frontier.
 pub fn evaluate_pareto_candidates(num_inputs: usize, num_classes: usize) -> Vec<ParetoCandidate> {
-    let mut candidates = Vec::new();
-
-    // 1. DenseMLP Small (int4)
-    candidates.push(ParetoCandidate {
-        name: "DenseMLP-Tiny (s4)".into(),
-        arch_name: "DenseMLP".into(),
-        quant_bits: 4,
-        hidden_units: 8,
-        accuracy: 0.88,
-        flash_bytes: (num_inputs * 8 / 2) + (8 * num_classes / 2) + 64,
-        sram_arena_bytes: 32,
-        estimated_cycles: (num_inputs * 8 + 8 * num_classes) * 2,
-        is_pareto_optimal: true,
-    });
-
-    // 2. DenseMLP Balanced (int8)
-    candidates.push(ParetoCandidate {
-        name: "DenseMLP-Mid (s8)".into(),
-        arch_name: "DenseMLP".into(),
-        quant_bits: 8,
-        hidden_units: 16,
-        accuracy: 0.93,
-        flash_bytes: (num_inputs * 16) + (16 * num_classes) + 128,
-        sram_arena_bytes: 48,
-        estimated_cycles: (num_inputs * 16 + 16 * num_classes) * 3,
-        is_pareto_optimal: true,
-    });
-
-    // 3. DenseMLP High-Capacity (int8)
-    candidates.push(ParetoCandidate {
-        name: "DenseMLP-Large (s8)".into(),
-        arch_name: "DenseMLP".into(),
-        quant_bits: 8,
-        hidden_units: 32,
-        accuracy: 0.96,
-        flash_bytes: (num_inputs * 32) + (32 * num_classes) + 256,
-        sram_arena_bytes: 80,
-        estimated_cycles: (num_inputs * 32 + 32 * num_classes) * 3,
-        is_pareto_optimal: false,
-    });
-
-    // 4. TinyConv1D Temporal (int8)
-    candidates.push(ParetoCandidate {
-        name: "TinyConv1D (s8)".into(),
-        arch_name: "TinyConv1D".into(),
-        quant_bits: 8,
-        hidden_units: 8,
-        accuracy: 0.97,
-        flash_bytes: (3 * 3 * 8) + (8 * num_classes) + 384,
-        sram_arena_bytes: 128,
-        estimated_cycles: (num_inputs * 3 * 8 + 8 * num_classes) * 4,
-        is_pareto_optimal: true,
-    });
-
-    // 5. RecurrentSVDF Memory-Efficient (int8)
-    candidates.push(ParetoCandidate {
-        name: "RecurrentSVDF (s8)".into(),
-        arch_name: "RecurrentSVDF".into(),
-        quant_bits: 8,
-        hidden_units: 12,
-        accuracy: 0.95,
-        flash_bytes: (num_inputs * 2 * 12) + (12 * num_classes) + 200,
-        sram_arena_bytes: 64,
-        estimated_cycles: (num_inputs * 2 * 12 + 12 * num_classes) * 3,
-        is_pareto_optimal: true,
-    });
+    let mut candidates = vec![
+        // 1. DenseMLP Small (int4)
+        ParetoCandidate {
+            name: "DenseMLP-Tiny (s4)".into(),
+            arch_name: "DenseMLP".into(),
+            quant_bits: 4,
+            hidden_units: 8,
+            accuracy: 0.88,
+            flash_bytes: (num_inputs * 8 / 2) + (8 * num_classes / 2) + 64,
+            sram_arena_bytes: 32,
+            estimated_cycles: (num_inputs * 8 + 8 * num_classes) * 2,
+            is_pareto_optimal: true,
+        },
+        // 2. DenseMLP Balanced (int8)
+        ParetoCandidate {
+            name: "DenseMLP-Mid (s8)".into(),
+            arch_name: "DenseMLP".into(),
+            quant_bits: 8,
+            hidden_units: 16,
+            accuracy: 0.93,
+            flash_bytes: (num_inputs * 16) + (16 * num_classes) + 128,
+            sram_arena_bytes: 48,
+            estimated_cycles: (num_inputs * 16 + 16 * num_classes) * 3,
+            is_pareto_optimal: true,
+        },
+        // 3. DenseMLP High-Capacity (int8)
+        ParetoCandidate {
+            name: "DenseMLP-Large (s8)".into(),
+            arch_name: "DenseMLP".into(),
+            quant_bits: 8,
+            hidden_units: 32,
+            accuracy: 0.96,
+            flash_bytes: (num_inputs * 32) + (32 * num_classes) + 256,
+            sram_arena_bytes: 80,
+            estimated_cycles: (num_inputs * 32 + 32 * num_classes) * 3,
+            is_pareto_optimal: false,
+        },
+        // 4. TinyConv1D Temporal (int8)
+        ParetoCandidate {
+            name: "TinyConv1D (s8)".into(),
+            arch_name: "TinyConv1D".into(),
+            quant_bits: 8,
+            hidden_units: 8,
+            accuracy: 0.97,
+            flash_bytes: (3 * 3 * 8) + (8 * num_classes) + 384,
+            sram_arena_bytes: 128,
+            estimated_cycles: (num_inputs * 3 * 8 + 8 * num_classes) * 4,
+            is_pareto_optimal: true,
+        },
+        // 5. RecurrentSVDF Memory-Efficient (int8)
+        ParetoCandidate {
+            name: "RecurrentSVDF (s8)".into(),
+            arch_name: "RecurrentSVDF".into(),
+            quant_bits: 8,
+            hidden_units: 12,
+            accuracy: 0.95,
+            flash_bytes: (num_inputs * 2 * 12) + (12 * num_classes) + 200,
+            sram_arena_bytes: 64,
+            estimated_cycles: (num_inputs * 2 * 12 + 12 * num_classes) * 3,
+            is_pareto_optimal: true,
+        },
+    ];
 
     mark_pareto_frontier(&mut candidates);
     candidates

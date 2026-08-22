@@ -149,10 +149,10 @@ impl LiveInspectorView {
                 ui.label("• Guts of Inference & Kernel Profiling");
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("🔄 Refresh USB").clicked() {
-                        if let Ok(devs) = UsbBridge::enumerate_devices() {
-                            self.available_devices = devs;
-                        }
+                    if ui.button("🔄 Refresh USB").clicked()
+                        && let Ok(devs) = UsbBridge::enumerate_devices()
+                    {
+                        self.available_devices = devs;
                     }
 
                     if self.is_simulated {

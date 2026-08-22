@@ -55,8 +55,11 @@ pub struct CompiledArtifact {
     pub bytecode: Vec<u8>,
 }
 
+#[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
-pub extern "C" fn LiteRtGetCompilerPluginVersion(version: *mut LiteRtApiVersion) -> LiteRtStatus {
+pub unsafe extern "C" fn LiteRtGetCompilerPluginVersion(
+    version: *mut LiteRtApiVersion,
+) -> LiteRtStatus {
     if version.is_null() {
         return LiteRtStatus::ErrorInvalidArgument;
     }
@@ -74,8 +77,9 @@ pub extern "C" fn LiteRtGetCompilerPluginSocManufacturer() -> *const c_char {
     c"ARM / embedded-nn".as_ptr()
 }
 
+#[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
-pub extern "C" fn LiteRtCreateCompilerPlugin(
+pub unsafe extern "C" fn LiteRtCreateCompilerPlugin(
     _context: *const c_void,
     plugin: *mut *mut c_void,
     _env_options: *const c_void,
@@ -93,8 +97,9 @@ pub extern "C" fn LiteRtCreateCompilerPlugin(
     LiteRtStatus::Ok
 }
 
+#[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
-pub extern "C" fn LiteRtDestroyCompilerPlugin(plugin: *mut c_void) {
+pub unsafe extern "C" fn LiteRtDestroyCompilerPlugin(plugin: *mut c_void) {
     if !plugin.is_null() {
         unsafe {
             let _ = Box::from_raw(plugin as *mut PluginState);
@@ -102,8 +107,9 @@ pub extern "C" fn LiteRtDestroyCompilerPlugin(plugin: *mut c_void) {
     }
 }
 
+#[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
-pub extern "C" fn LiteRtGetCompilerPluginSupportedHardware(
+pub unsafe extern "C" fn LiteRtGetCompilerPluginSupportedHardware(
     _plugin: *mut c_void,
     supported_hw: *mut u64,
 ) -> LiteRtStatus {
@@ -116,8 +122,9 @@ pub extern "C" fn LiteRtGetCompilerPluginSupportedHardware(
     LiteRtStatus::Ok
 }
 
+#[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
-pub extern "C" fn LiteRtGetNumCompilerPluginSupportedSocModels(
+pub unsafe extern "C" fn LiteRtGetNumCompilerPluginSupportedSocModels(
     _plugin: *mut c_void,
     num_models: *mut usize,
 ) -> LiteRtStatus {
@@ -130,8 +137,9 @@ pub extern "C" fn LiteRtGetNumCompilerPluginSupportedSocModels(
     LiteRtStatus::Ok
 }
 
+#[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
-pub extern "C" fn LiteRtGetCompilerPluginSupportedSocModel(
+pub unsafe extern "C" fn LiteRtGetCompilerPluginSupportedSocModel(
     _plugin: *mut c_void,
     soc_model_idx: usize,
     soc_model_name: *mut *const c_char,
@@ -154,8 +162,9 @@ pub extern "C" fn LiteRtGetCompilerPluginSupportedSocModel(
     LiteRtStatus::Ok
 }
 
+#[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
-pub extern "C" fn LiteRtDestroyCompiledResult(result: *mut c_void) {
+pub unsafe extern "C" fn LiteRtDestroyCompiledResult(result: *mut c_void) {
     if !result.is_null() {
         unsafe {
             let _ = Box::from_raw(result as *mut CompiledArtifact);
@@ -163,8 +172,9 @@ pub extern "C" fn LiteRtDestroyCompiledResult(result: *mut c_void) {
     }
 }
 
+#[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
-pub extern "C" fn LiteRtGetCompiledResultByteCode(
+pub unsafe extern "C" fn LiteRtGetCompiledResultByteCode(
     result: *mut c_void,
     byte_code_idx: usize,
     byte_code: *mut *const c_void,
@@ -193,7 +203,7 @@ mod tests {
             patch: 0,
         };
         assert_eq!(
-            LiteRtGetCompilerPluginVersion(&mut version),
+            unsafe { LiteRtGetCompilerPluginVersion(&mut version) },
             LiteRtStatus::Ok
         );
         assert_eq!(version.major, 1);
@@ -203,37 +213,41 @@ mod tests {
 
         let mut plugin: *mut c_void = std::ptr::null_mut();
         assert_eq!(
-            LiteRtCreateCompilerPlugin(
-                std::ptr::null(),
-                &mut plugin,
-                std::ptr::null(),
-                std::ptr::null()
-            ),
+            unsafe {
+                LiteRtCreateCompilerPlugin(
+                    std::ptr::null(),
+                    &mut plugin,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            },
             LiteRtStatus::Ok
         );
         assert!(!plugin.is_null());
 
         let mut hw: u64 = 0;
         assert_eq!(
-            LiteRtGetCompilerPluginSupportedHardware(plugin, &mut hw),
+            unsafe { LiteRtGetCompilerPluginSupportedHardware(plugin, &mut hw) },
             LiteRtStatus::Ok
         );
         assert!(hw & LITERT_HW_ACCELERATOR_CPU != 0);
 
         let mut num_models = 0usize;
         assert_eq!(
-            LiteRtGetNumCompilerPluginSupportedSocModels(plugin, &mut num_models),
+            unsafe { LiteRtGetNumCompilerPluginSupportedSocModels(plugin, &mut num_models) },
             LiteRtStatus::Ok
         );
         assert_eq!(num_models, SUPPORTED_SOC_MODELS.len());
 
         let mut model_name: *const c_char = std::ptr::null();
         assert_eq!(
-            LiteRtGetCompilerPluginSupportedSocModel(plugin, 3, &mut model_name),
+            unsafe { LiteRtGetCompilerPluginSupportedSocModel(plugin, 3, &mut model_name) },
             LiteRtStatus::Ok
         );
         assert!(!model_name.is_null());
 
-        LiteRtDestroyCompilerPlugin(plugin);
+        unsafe {
+            LiteRtDestroyCompilerPlugin(plugin);
+        }
     }
 }

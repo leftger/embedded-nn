@@ -58,8 +58,8 @@ pub fn apply_noise(waveform: &[f32], seed: u64, std_dev: f32) -> Vec<f32> {
 pub fn apply_frequency_mask(frames: &mut [Vec<f32>], start_channel: usize, mask_width: usize) {
     for frame in frames.iter_mut() {
         let end = (start_channel + mask_width).min(frame.len());
-        for ch in start_channel..end {
-            frame[ch] = 0.0;
+        if start_channel < end {
+            frame[start_channel..end].fill(0.0);
         }
     }
 }
@@ -69,9 +69,9 @@ pub fn apply_frequency_mask(frames: &mut [Vec<f32>], start_channel: usize, mask_
 /// Zeroes `mask_width` consecutive frames starting at `start_frame`.
 pub fn apply_time_mask(frames: &mut [Vec<f32>], start_frame: usize, mask_width: usize) {
     let end = (start_frame + mask_width).min(frames.len());
-    for f in start_frame..end {
-        for val in frames[f].iter_mut() {
-            *val = 0.0;
+    if start_frame < end {
+        for frame in &mut frames[start_frame..end] {
+            frame.fill(0.0);
         }
     }
 }

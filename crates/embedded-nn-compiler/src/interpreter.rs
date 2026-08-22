@@ -1,4 +1,4 @@
-//! Host-side integer interpreter for [`ModelGraph`](crate::ModelGraph).
+//! Host-side integer interpreter for [`ModelGraph`].
 //!
 //! This executes the same quantized kernels and arena schedule used by generated models. It is
 //! intentionally a `std` development tool; generated/device inference remains allocation-free.

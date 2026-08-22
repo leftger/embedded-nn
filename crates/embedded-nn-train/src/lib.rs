@@ -1,4 +1,4 @@
-//! Host-side Burn training that emits an integer [`ModelGraph`].
+//! Host-side Burn training that emits an integer [`embedded_nn_compiler::ir::ModelGraph`].
 //!
 //! Burn stays on the host. Device inference continues to use CMSIS-NN-style s8 kernels.
 
