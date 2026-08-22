@@ -102,6 +102,46 @@ impl LiveInspectorView {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, device_link: &mut Option<DeviceLink>) {
+        if let Some(link) = device_link.as_mut() {
+            while let Some(msg) = link.take_result() {
+                match msg {
+                    embedded_nn_live::host::OwnedMsg::InferenceResult {
+                        execution_cycles,
+                        logits,
+                        ..
+                    } => {
+                        self.is_simulated = false;
+                        self.total_cycles = execution_cycles;
+                        self.total_time_us = execution_cycles as f32 / 100.0;
+                        if !logits.is_empty() {
+                            let logits_i8: Vec<i8> = logits.iter().map(|&b| b as i8).collect();
+                            let max_l = logits_i8.iter().copied().fold(i8::MIN, i8::max) as f32;
+                            let exp_sum: f32 =
+                                logits_i8.iter().map(|&l| ((l as f32) - max_l).exp()).sum();
+                            self.live_logits = logits_i8
+                                .iter()
+                                .map(|&l| ((l as f32) - max_l).exp() / exp_sum.max(1e-6))
+                                .collect();
+                        }
+                    }
+                    embedded_nn_live::host::OwnedMsg::LayerProfile {
+                        layer_idx,
+                        execution_cycles,
+                        activations,
+                        ..
+                    } => {
+                        let idx = layer_idx as usize;
+                        if let Some(bench) = self.layer_benchmarks.get_mut(idx) {
+                            bench.cycles = execution_cycles;
+                            bench.time_us = execution_cycles as f32 / 100.0;
+                            bench.activations = activations.iter().map(|&b| b as i8).collect();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         ui.vertical(|ui| {
             // Header & Device Connection Bar
             ui.horizontal(|ui| {

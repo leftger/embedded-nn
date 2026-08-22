@@ -64,6 +64,44 @@ impl CodegenView {
                 }
 
                 if ui
+                    .add_enabled(
+                        state.export_enabled() && state.compiled_graph.is_some(),
+                        egui::Button::new("📦 C99 CMake Pack"),
+                    )
+                    .clicked()
+                {
+                    if let Some(graph) = &state.compiled_graph {
+                        let files = embedded_nn_codegen::generate_c_project_bundle("embedded_model", graph);
+                        for f in files {
+                            if let Some(parent) = Path::new(&f.path).parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+                            let _ = std::fs::write(&f.path, f.content);
+                        }
+                        self.copy_status = Some("Exported C99 project pack (include/embedded_model.h, CMakeLists.txt, Makefile, main.c)!".into());
+                    }
+                }
+
+                if ui
+                    .add_enabled(
+                        state.export_enabled() && state.compiled_graph.is_some(),
+                        egui::Button::new("📦 Rust Crate Pack"),
+                    )
+                    .clicked()
+                {
+                    if let Some(graph) = &state.compiled_graph {
+                        let files = embedded_nn_codegen::generate_rust_crate_bundle("embedded_model", graph);
+                        for f in files {
+                            if let Some(parent) = Path::new(&f.path).parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+                            let _ = std::fs::write(&f.path, f.content);
+                        }
+                        self.copy_status = Some("Exported Rust #![no_std] crate pack (Cargo.toml, src/lib.rs)!".into());
+                    }
+                }
+
+                if ui
                     .add_enabled(state.export_enabled(), egui::Button::new("📋 Copy Code"))
                     .clicked()
                 {

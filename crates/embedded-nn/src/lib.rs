@@ -38,6 +38,7 @@
 )]
 
 pub mod activations;
+pub mod anomaly;
 pub mod basic_math;
 pub mod concat;
 pub mod convolution;
@@ -51,6 +52,7 @@ pub mod pad;
 pub mod pooling;
 pub mod recurrent;
 pub mod reshape;
+pub mod safety;
 pub mod simd;
 pub mod slice;
 pub mod softmax;
