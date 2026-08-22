@@ -1241,8 +1241,8 @@ impl StudioState {
                 num_inputs,
                 hidden: self.model_config.hidden_units,
                 num_classes: self.classes.len(),
-                learning_rate: f64::from(self.model_config.learning_rate),
-                epochs: self.model_config.epochs.max(1),
+                learning_rate: (self.model_config.learning_rate as f64 * 0.25).clamp(0.001, 0.008),
+                epochs: self.model_config.epochs.max(50),
                 mode: if qat {
                     embedded_nn_train::TrainMode::Qat
                 } else {
