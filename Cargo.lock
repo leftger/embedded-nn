@@ -2223,6 +2223,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-nn-litert-plugin"
+version = "0.2.0"
+dependencies = [
+ "embedded-nn-codegen",
+ "embedded-nn-compiler",
+ "embedded-nn-tflite",
+ "serde_json",
+]
+
+[[package]]
 name = "embedded-nn-live"
 version = "0.2.0"
 dependencies = [

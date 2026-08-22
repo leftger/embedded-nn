@@ -1,0 +1,17 @@
+[package]
+name = "embedded-nn-litert-plugin"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "LiteRT AOT Compiler Plugin implementation for embedded-nn (targeting ARM Cortex-M and embedded MCUs)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+embedded-nn-compiler = { workspace = true }
+embedded-nn-codegen = { workspace = true }
+embedded-nn-tflite = { workspace = true }
+serde_json = { workspace = true }
