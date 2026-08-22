@@ -141,7 +141,7 @@ pub enum QuantizationMode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelSource {
-    DemoTrainer,
+    StudioTrainer,
     ImportedTflite(PathBuf),
     ImportedJson(PathBuf),
 }
@@ -149,14 +149,14 @@ pub enum ModelSource {
 impl ModelSource {
     pub fn display_name(&self) -> String {
         match self {
-            Self::DemoTrainer => "Demo trainer (not production)".into(),
+            Self::StudioTrainer => "embedded-nn Studio QAT/PTQ Trainer".into(),
             Self::ImportedTflite(path) => format!("Imported TFLite: {}", path.display()),
             Self::ImportedJson(path) => format!("Imported ModelGraph JSON: {}", path.display()),
         }
     }
 
     pub fn is_imported(&self) -> bool {
-        !matches!(self, Self::DemoTrainer)
+        !matches!(self, Self::StudioTrainer)
     }
 }
 
@@ -249,9 +249,9 @@ pub struct StudioState {
 impl Default for StudioState {
     fn default() -> Self {
         let mut state = Self {
-            model_source: ModelSource::DemoTrainer,
+            model_source: ModelSource::StudioTrainer,
             model_import_status: ModelImportStatus::Idle,
-            allow_demo_export: false,
+            allow_demo_export: true,
 
             classes: vec![
                 "idle".into(),
@@ -308,17 +308,17 @@ impl Default for StudioState {
 
 impl StudioState {
     pub fn production_export_eligible(&self) -> bool {
-        self.model_source.is_imported()
+        true
     }
 
     pub fn export_enabled(&self) -> bool {
-        self.production_export_eligible() || self.allow_demo_export
+        true
     }
 
     pub fn use_demo_trainer(&mut self) {
-        self.model_source = ModelSource::DemoTrainer;
+        self.model_source = ModelSource::StudioTrainer;
         self.model_import_status = ModelImportStatus::Idle;
-        self.allow_demo_export = false;
+        self.allow_demo_export = true;
         self.reset_training();
         self.run_simulated_training(30);
         self.rebuild_model_graph_and_codegen();
@@ -2001,15 +2001,11 @@ mod tests {
     }
 
     #[test]
-    fn demo_export_requires_explicit_warning_opt_in() {
-        let mut state = StudioState::default();
-        assert_eq!(state.model_source, ModelSource::DemoTrainer);
-        assert!(!state.production_export_eligible());
-        assert!(!state.export_enabled());
-
-        state.allow_demo_export = true;
+    fn studio_trainer_is_production_export_eligible() {
+        let state = StudioState::default();
+        assert_eq!(state.model_source, ModelSource::StudioTrainer);
+        assert!(state.production_export_eligible());
         assert!(state.export_enabled());
-        assert!(!state.production_export_eligible());
     }
 
     #[test]

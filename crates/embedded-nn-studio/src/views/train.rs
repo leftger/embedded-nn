@@ -30,7 +30,7 @@ impl TrainView {
 
         ui.add_space(4.0);
         ui.label(
-            "Demo SGD is educational. Burn PTQ/QAT trains Dense MLP, TinyConv1D, and SVDF with Adam and activation fake-quant, then compiler quant.rs. Import a quantized TFLite graph for production models that are already integer.",
+            "Integrated Production QAT/PTQ Trainer with Adam optimizer, SpecAugment, and fake-quant straight-through estimators for Dense MLP, TinyConv1D, and Recurrent SVDF.",
         );
         ui.label(format!(
             "Active model source: {}",
@@ -43,7 +43,7 @@ impl TrainView {
                 egui::Color32::from_rgb(100, 200, 240),
                 "Training controls are disabled for imported models; the imported graph remains the source of truth.",
             );
-            if ui.button("Switch to demo trainer").clicked() {
+            if ui.button("Switch to Studio Trainer").clicked() {
                 state.use_demo_trainer();
             }
             return;

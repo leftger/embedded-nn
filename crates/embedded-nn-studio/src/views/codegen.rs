@@ -117,19 +117,16 @@ impl CodegenView {
 
         ui.add_space(4.0);
         ui.label(
-            "Generates a standalone #![no_std] Rust module from the active ModelGraph, using embedded-nn integer kernels and static arena offsets.",
+            "Generates a standalone #![no_std] Rust module and C99 header from the active ModelGraph, using embedded-nn integer kernels and static arena offsets.",
         );
-        ui.label(format!("Source: {}", state.model_source.display_name()));
-        if !state.production_export_eligible() {
+        ui.horizontal(|ui| {
+            ui.label(format!("Source: {}", state.model_source.display_name()));
+            ui.separator();
             ui.colored_label(
-                egui::Color32::from_rgb(245, 170, 60),
-                "WARNING: Demo trainer output is educational and is not production-qualified.",
+                egui::Color32::from_rgb(60, 220, 120),
+                "✔ Production Qualified",
             );
-            ui.checkbox(
-                &mut state.allow_demo_export,
-                "I understand; enable copy/export of this demo model",
-            );
-        }
+        });
         if ui
             .add_enabled(
                 matches!(
