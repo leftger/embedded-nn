@@ -289,8 +289,16 @@ fn train_conv1d(features: &[Vec<f32>], labels: &[usize], config: &TrainConfig) -
     let yt =
         Tensor::<TrainB, 1, Int>::from_data(TensorData::new(flat_labels, [n_samples]), &device);
 
-    for _ in 0..config.epochs.max(1) {
-        let logits = model.forward(xt.clone(), fake);
+    let total_epochs = config.epochs.max(1);
+    let warmup_epochs = if config.mode == TrainMode::Qat {
+        (total_epochs / 4).max(5)
+    } else {
+        0
+    };
+
+    for epoch in 0..total_epochs {
+        let use_fake = config.mode == TrainMode::Qat && epoch >= warmup_epochs;
+        let logits = model.forward(xt.clone(), use_fake);
         let loss = loss_fn.forward(logits, yt.clone());
         let loss_val: f32 = loss.clone().into_data().to_vec::<f32>().expect("loss")[0];
         final_loss = loss_val;
