@@ -199,4 +199,57 @@ mod tests {
         assert_eq!(frames, 7);
         assert!(out.iter().any(|v| *v != 0.0));
     }
+
+    #[test]
+    fn test_feature_dsp_error_on_unsupported_config() {
+        let invalid_cfg = FeatureDspConfig {
+            window_size: 0, // Invalid 0 window size
+            window_kind: WindowKind::Rectangular,
+            num_mel_bins: 16,
+            high_pass_cutoff_hz: 0.0,
+            sample_rate_hz: 100.0,
+            frame_hop_size: 32,
+            capture_samples: 256,
+            input_scale: 1.0 / 127.0,
+        };
+        let mut out = [0.0f32; 128];
+        assert_eq!(
+            extract_mel_sequence(&invalid_cfg, &[0.1; 64], &mut out),
+            Err(FeatureDspError::UnsupportedConfig)
+        );
+    }
+
+    #[test]
+    fn test_feature_dsp_error_on_output_too_small() {
+        let cfg = FeatureDspConfig {
+            window_size: 64,
+            window_kind: WindowKind::Hamming,
+            num_mel_bins: 16,
+            high_pass_cutoff_hz: 0.0, // High-pass bypassed
+            sample_rate_hz: 100.0,
+            frame_hop_size: 32,
+            capture_samples: 256,
+            input_scale: 1.0 / 127.0,
+        };
+        let mut out = [0.0f32; 10]; // Output buffer too small (requires 7 * 16 = 112)
+        assert_eq!(
+            extract_mel_sequence(&cfg, &[0.5; 256], &mut out),
+            Err(FeatureDspError::OutputTooSmall)
+        );
+    }
+
+    #[test]
+    fn test_quantize_mel_s8_rounding_and_clamping() {
+        let values = [0.0, 0.5, 1.0, -1.0, 1.5, -2.0];
+        let scale = 1.0 / 127.0;
+        let mut out = [0i8; 6];
+        quantize_mel_s8(&values, scale, &mut out);
+
+        assert_eq!(out[0], 0);
+        assert_eq!(out[1], 64); // 0.5 * 127 = 63.5 -> 64
+        assert_eq!(out[2], 127); // 1.0 * 127 = 127
+        assert_eq!(out[3], -127);
+        assert_eq!(out[4], 127); // Clamped at 127
+        assert_eq!(out[5], -128); // Clamped at -128
+    }
 }

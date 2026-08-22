@@ -308,4 +308,41 @@ mod tests {
         let (multiplier, shift) = calculate_output_requant_multiplier(0.01, 0.01, 0.0);
         assert_eq!((multiplier, shift), (0, 0));
     }
+
+    #[test]
+    fn test_quantize_multiplier_extreme_scales() {
+        // Very small scale
+        let (m_small, s_small) = quantize_multiplier(1e-8);
+        assert!(m_small > 0);
+        assert!(s_small < 0);
+
+        // Scale > 1.0
+        let (m_large, s_large) = quantize_multiplier(3.5);
+        assert!(m_large > 0);
+        assert!(s_large >= 0);
+
+        // Negative or zero scale
+        let (m_zero, s_zero) = quantize_multiplier(0.0);
+        assert_eq!((m_zero, s_zero), (0, 0));
+        let (m_neg, s_neg) = quantize_multiplier(-1.0);
+        assert_eq!((m_neg, s_neg), (0, 0));
+    }
+
+    #[test]
+    fn test_calculate_symmetric_quant_s8_edge_cases() {
+        // Zero abs_max
+        let q_zero = calculate_symmetric_quant_s8(0.0);
+        assert_eq!(q_zero.zero_point, 0);
+        assert!(q_zero.scale > 0.0);
+
+        // Positive abs_max
+        let q_pos = calculate_symmetric_quant_s8(3.0);
+        assert_eq!(q_pos.zero_point, 0);
+        assert_eq!(q_pos.scale, 3.0 / 127.0);
+
+        // Negative abs_max (abs value handled)
+        let q_neg = calculate_symmetric_quant_s8(4.0);
+        assert_eq!(q_neg.zero_point, 0);
+        assert_eq!(q_neg.scale, 4.0 / 127.0);
+    }
 }

@@ -174,6 +174,8 @@ pub struct ModelConfig {
     pub quant_mode: QuantizationMode,
     pub epochs: usize,
     pub learning_rate: f32,
+    pub enable_augmentation: bool,
+    pub augment_config: embedded_nn_train::AugmentConfig,
 }
 
 impl Default for ModelConfig {
@@ -184,6 +186,8 @@ impl Default for ModelConfig {
             quant_mode: QuantizationMode::Int4SubByte,
             epochs: 50,
             learning_rate: 0.02,
+            enable_augmentation: true,
+            augment_config: embedded_nn_train::AugmentConfig::default(),
         }
     }
 }
@@ -1132,6 +1136,47 @@ impl StudioState {
                     }
                 }
                 labels.push(idx);
+
+                if self.model_config.enable_augmentation {
+                    let mut aug_frames = sample.frames.clone();
+                    if self.model_config.augment_config.max_freq_mask_channels > 0 {
+                        embedded_nn_train::apply_frequency_mask(
+                            &mut aug_frames,
+                            1,
+                            self.model_config.augment_config.max_freq_mask_channels,
+                        );
+                    }
+                    if self.model_config.augment_config.max_time_mask_frames > 0 {
+                        embedded_nn_train::apply_time_mask(
+                            &mut aug_frames,
+                            0,
+                            self.model_config.augment_config.max_time_mask_frames,
+                        );
+                    }
+                    match self.model_config.arch {
+                        ModelArchitecture::DenseMLP => {
+                            features.push(Self::mean_pool_frames(&aug_frames, num_inputs));
+                        }
+                        ModelArchitecture::TinyConv1D | ModelArchitecture::RecurrentSVDF => {
+                            if aug_frames.len() == expected_frames {
+                                let mut flat = Vec::with_capacity(expected_frames * num_inputs);
+                                if self.model_config.arch == ModelArchitecture::TinyConv1D {
+                                    for f in 0..num_inputs {
+                                        for t in 0..expected_frames {
+                                            flat.push(aug_frames[t][f]);
+                                        }
+                                    }
+                                } else {
+                                    for frame in &aug_frames {
+                                        flat.extend_from_slice(frame);
+                                    }
+                                }
+                                features.push(flat);
+                            }
+                        }
+                    }
+                    labels.push(idx);
+                }
             }
         }
         if features.is_empty() {

@@ -858,8 +858,47 @@ mod tests {
         let src = [0.25f32, -8.0, 16.5];
         let mut bytes = [0u8; 12];
         encode_f32_le(&src, &mut bytes).unwrap();
-        let mut out = [0f32; 3];
-        assert_eq!(decode_f32_le(&bytes, &mut out).unwrap(), 3);
-        assert_eq!(out, src);
+        let mut dst = [0.0f32; 3];
+        decode_f32_le(&bytes, &mut dst).unwrap();
+        assert_eq!(src, dst);
+    }
+
+    #[test]
+    fn test_decoder_byte_by_byte_stream_continuity() {
+        let msg = Msg::LayerProfile {
+            seq: 10,
+            layer_idx: 2,
+            total_layers: 5,
+            execution_cycles: 3450,
+            activations: &[12, 34, 56, 78],
+        };
+        let mut encoded = vec![0u8; msg.encoded_len()];
+        msg.encode(&mut encoded).unwrap();
+
+        let mut dec = Decoder::<256>::new();
+        let mut decoded_msg: Option<Owned> = None;
+
+        // Feed 1 byte at a time (simulating arbitrary USB chunk boundaries)
+        for &byte in &encoded {
+            dec.feed(&[byte], |m| decoded_msg = Some(owned(&m)), |_e| {});
+        }
+
+        assert_eq!(
+            decoded_msg,
+            Some(Owned::LayerProfile {
+                seq: 10,
+                layer_idx: 2,
+                total_layers: 5,
+                execution_cycles: 3450,
+                activations: vec![12, 34, 56, 78],
+            })
+        );
+    }
+
+    #[test]
+    fn test_encode_error_on_buffer_too_small() {
+        let msg = Msg::Ping;
+        let mut small_buf = [0u8; 2]; // Needs at least 9 bytes (HEADER_LEN + 0 + TRAILER_LEN)
+        assert_eq!(msg.encode(&mut small_buf), Err(EncodeError::BufferTooSmall));
     }
 }

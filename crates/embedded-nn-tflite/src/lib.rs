@@ -19,7 +19,7 @@
 
 #[path = "../schema/schema_generated.rs"]
 #[allow(warnings)]
-mod schema;
+pub mod schema;
 
 use embedded_nn_compiler::builder::ModelBuilder;
 use embedded_nn_compiler::ir::*;
@@ -117,7 +117,12 @@ pub fn import_tflite(bytes: &[u8]) -> Result<ModelGraph, ImportError> {
 
         let opcode_index = operator.opcode_index() as usize;
         let opcode = operator_codes.get(opcode_index);
-        let builtin = opcode.builtin_code();
+        let dep = opcode.deprecated_builtin_code();
+        let builtin = if opcode.builtin_code().0 == 0 && dep != 0 {
+            tflite::BuiltinOperator(dep as i32)
+        } else {
+            opcode.builtin_code()
+        };
 
         let output_idx = op_outputs.get(0) as usize;
         let output_tensor = tensors.get(output_idx);

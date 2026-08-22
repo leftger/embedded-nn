@@ -308,3 +308,37 @@ impl<SPI: SpiBus, CS: OutputPin> SpiSdCard<SPI, CS> {
         Ok((resp[0] & 0x1F) == 0x05)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_buffer_writer_overflow() {
+        let mut buf = [0u8; 4];
+        let mut writer = BufferWriter::new(&mut buf);
+        assert!(writer.write_byte(b'a').is_ok());
+        assert!(writer.write_byte(b'b').is_ok());
+        assert!(writer.write_byte(b'c').is_ok());
+        assert!(writer.write_byte(b'd').is_ok());
+        assert!(writer.write_byte(b'e').is_err());
+        assert_eq!(writer.len(), 4);
+    }
+
+    #[test]
+    fn test_jsonl_formatter_output() {
+        let mut burst = JsonlRecordFormatter::new(1, 100.0);
+        assert!(burst.push(AccelSample { x: 0.12, y: -0.34, z: 0.98 }));
+        assert!(burst.push(AccelSample { x: 0.15, y: -0.30, z: 0.95 }));
+
+        let mut buf = [0u8; 512];
+        let written = burst.format_jsonl(&mut buf).unwrap();
+        assert!(written > 0);
+
+        let str_out = core::str::from_utf8(&buf[..written]).unwrap();
+        assert!(str_out.starts_with("{\"sample_id\":\"sample_0001\""));
+        assert!(str_out.contains("\"sample_rate_hz\":100.0"));
+        assert!(str_out.contains("\"channel_names\":[\"x\",\"y\",\"z\"]"));
+        assert!(str_out.ends_with("]}\n"));
+    }
+}

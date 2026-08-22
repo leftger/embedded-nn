@@ -235,3 +235,23 @@ impl<I2C: embedded_hal::i2c::I2c> Lis2de12<I2C> {
         self.i2c
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_accel_g_magnitude() {
+        let accel = AccelG { x: 3.0, y: 4.0, z: 0.0 };
+        assert_eq!(accel.magnitude(), 5.0);
+        assert_eq!(accel.to_array(), [3.0, 4.0, 0.0]);
+    }
+
+    #[test]
+    fn test_full_scale_factors() {
+        assert_eq!(FullScale::G2.scale_g(), 0.0039);
+        assert_eq!(FullScale::G4.scale_g(), 0.0078);
+        assert_eq!(FullScale::G8.scale_g(), 0.0156);
+        assert_eq!(FullScale::G16.scale_g(), 0.0312);
+    }
+}

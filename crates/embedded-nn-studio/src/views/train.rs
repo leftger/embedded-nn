@@ -179,6 +179,46 @@ impl TrainView {
                     state.rebuild_model_graph_and_codegen();
                 }
             });
+
+            ui.add_space(6.0);
+
+            // Data Augmentation & SpecAugment Sub-panel
+            ui.horizontal(|ui| {
+                ui.checkbox(
+                    &mut state.model_config.enable_augmentation,
+                    "⚡ Data Augmentation & SpecAugment",
+                );
+                if state.model_config.enable_augmentation {
+                    ui.separator();
+                    ui.label("Noise σ:");
+                    ui.add(
+                        egui::DragValue::new(&mut state.model_config.augment_config.noise_std_dev)
+                            .speed(0.005)
+                            .range(0.0..=0.1)
+                            .suffix(" g"),
+                    );
+
+                    ui.separator();
+                    ui.label("SpecAug Freq Mask:");
+                    ui.add(
+                        egui::DragValue::new(
+                            &mut state.model_config.augment_config.max_freq_mask_channels,
+                        )
+                        .range(0..=4)
+                        .suffix(" bins"),
+                    );
+
+                    ui.separator();
+                    ui.label("Time Mask:");
+                    ui.add(
+                        egui::DragValue::new(
+                            &mut state.model_config.augment_config.max_time_mask_frames,
+                        )
+                        .range(0..=4)
+                        .suffix(" frames"),
+                    );
+                }
+            });
         });
 
         if config_changed {

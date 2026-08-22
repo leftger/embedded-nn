@@ -167,36 +167,89 @@ pub fn convolve_s4(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Activation;
+    use crate::types::{Activation, Padding2D, Tile};
 
     #[test]
-    fn test_s4_packing() {
-        let (low, high) = (-5i8, 7i8);
-        let packed = pack_s4_pair(low, high);
-        let (unpacked_low, unpacked_high) = unpack_s4_pair(packed);
-        assert_eq!(unpacked_low, -5);
-        assert_eq!(unpacked_high, 7);
+    fn test_s4_exhaustive_all_256_pairs() {
+        for low in -8i8..=7i8 {
+            for high in -8i8..=7i8 {
+                let packed = pack_s4_pair(low, high);
+                let (unpacked_low, unpacked_high) = unpack_s4_pair(packed);
+                assert_eq!(
+                    unpacked_low, low,
+                    "low nibble mismatch for pair ({}, {})",
+                    low, high
+                );
+                assert_eq!(
+                    unpacked_high, high,
+                    "high nibble mismatch for pair ({}, {})",
+                    low, high
+                );
+            }
+        }
     }
 
     #[test]
-    fn test_fully_connected_s4() {
+    fn test_fully_connected_s4_odd_depth_and_bias() {
         let fc_params = FcParams {
             input_offset: 0,
             filter_offset: 0,
-            output_offset: 0,
+            output_offset: 2,
             activation: Activation::int8_unconstrained(),
         };
         let quant_params = PerTensorQuantParams::new(1073741824, 0); // 0.5
-        let input_dims = Dims::new(1, 1, 1, 2);
-        let input = [4i8, 6i8];
+        // 3 inputs (odd depth)
+        let input_dims = Dims::new(1, 1, 1, 3);
+        let input = [10i8, -4i8, 6i8];
 
-        let filter_dims = Dims::new(2, 1, 1, 1);
-        let packed_kernel = [pack_s4_pair(2i8, 3i8)]; // w0 = 2, w1 = 3
+        let filter_dims = Dims::new(3, 1, 1, 1);
+        // 3 weights: [3, -2, 4] -> packed: [pack(3, -2), pack(4, 0)]
+        let packed_kernel = [pack_s4_pair(3, -2), pack_s4_pair(4, 0)];
         let output_dims = Dims::new(1, 1, 1, 1);
+        let bias = [10i32];
         let mut output = [0i8; 1];
 
         fully_connected_s4(
             &fc_params,
+            &quant_params,
+            &input_dims,
+            &input,
+            &filter_dims,
+            &packed_kernel,
+            Some(&bias),
+            &output_dims,
+            &mut output,
+        )
+        .unwrap();
+
+        // Acc = 10 (bias) + 10*3 + (-4)*(-2) + 6*4 = 10 + 30 + 8 + 24 = 72
+        // Requantized: 72 * 0.5 = 36
+        // Output offset: 36 + 2 = 38
+        assert_eq!(output[0], 38);
+    }
+
+    #[test]
+    fn test_convolve_s4_execution() {
+        let conv_params = ConvParams {
+            padding: Padding2D::new(0, 0, 0, 0),
+            stride: Tile::new(1, 1),
+            dilation: Tile::new(1, 1),
+            input_offset: 0,
+            output_offset: 0,
+            activation: Activation::int8_unconstrained(),
+        };
+        let quant_params = PerTensorQuantParams::new(1073741824, 0); // 0.5
+        let input_dims = Dims::new(1, 2, 2, 1);
+        let input = [2i8, 4i8, 6i8, 8i8];
+
+        let filter_dims = Dims::new(1, 2, 2, 1);
+        // 4 kernel weights: [1, 2, 3, 4] -> packed into 2 bytes: [pack(1, 2), pack(3, 4)]
+        let packed_kernel = [pack_s4_pair(1, 2), pack_s4_pair(3, 4)];
+        let output_dims = Dims::new(1, 1, 1, 1);
+        let mut output = [0i8; 1];
+
+        convolve_s4(
+            &conv_params,
             &quant_params,
             &input_dims,
             &input,
@@ -208,7 +261,8 @@ mod tests {
         )
         .unwrap();
 
-        // 4*2 + 6*3 = 26. Requantized * 0.5 = 13
-        assert_eq!(output[0], 13);
+        // 2*1 + 4*2 + 6*3 + 8*4 = 2 + 8 + 18 + 32 = 60
+        // Requantized: 60 * 0.5 = 30
+        assert_eq!(output[0], 30);
     }
 }
