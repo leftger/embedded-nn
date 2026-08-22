@@ -1766,6 +1766,9 @@ impl StudioState {
     }
 
     pub fn export_model_bundle(&self, model_rs_path: &Path) -> Result<String, String> {
+        if let Some(parent) = model_rs_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         std::fs::write(model_rs_path, &self.generated_rust_code)
             .map_err(|error| format!("Export failed: {error}"))?;
         let sidecar = model_rs_path.with_file_name("dsp_contract.json");
@@ -1777,6 +1780,91 @@ impl StudioState {
             "Saved {} and {}",
             model_rs_path.display(),
             sidecar.display()
+        ))
+    }
+
+    pub fn export_c_header(&self, model_h_path: &Path) -> Result<String, String> {
+        let Some(graph) = &self.compiled_graph else {
+            return Err("No compiled ModelGraph available to export".into());
+        };
+        if let Some(parent) = model_h_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let struct_name = if self.model_source.is_imported() {
+            "ImportedModel"
+        } else {
+            "GestureNeuralNet"
+        };
+        let c_code = embedded_nn_codegen::CCodeGenerator::new(struct_name).generate(graph);
+        std::fs::write(model_h_path, c_code)
+            .map_err(|error| format!("C header export failed: {error}"))?;
+        let sidecar = model_h_path.with_file_name("dsp_contract.json");
+        let json = serde_json::to_string_pretty(&self.dsp.to_contract())
+            .map_err(|error| format!("DSP contract serialize failed: {error}"))?;
+        std::fs::write(&sidecar, json)
+            .map_err(|error| format!("DSP contract export failed: {error}"))?;
+        Ok(format!(
+            "Saved {} and {}",
+            model_h_path.display(),
+            sidecar.display()
+        ))
+    }
+
+    pub fn export_rust_crate(&self, target_dir: &Path) -> Result<String, String> {
+        let Some(graph) = &self.compiled_graph else {
+            return Err("No compiled ModelGraph available to export".into());
+        };
+        let struct_name = if self.model_source.is_imported() {
+            "ImportedModel"
+        } else {
+            "GestureNeuralNet"
+        };
+        let files = embedded_nn_codegen::generate_rust_crate_bundle(struct_name, graph);
+        for f in files {
+            let out_path = target_dir.join(&f.path);
+            if let Some(parent) = out_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            std::fs::write(&out_path, f.content)
+                .map_err(|e| format!("Failed writing {}: {e}", out_path.display()))?;
+        }
+        let contract_path = target_dir.join("dsp_contract.json");
+        let json = serde_json::to_string_pretty(&self.dsp.to_contract())
+            .map_err(|error| format!("DSP contract serialize failed: {error}"))?;
+        std::fs::write(&contract_path, json)
+            .map_err(|error| format!("DSP contract export failed: {error}"))?;
+        Ok(format!(
+            "Exported standalone Rust crate to {}",
+            target_dir.display()
+        ))
+    }
+
+    pub fn export_c_project(&self, target_dir: &Path) -> Result<String, String> {
+        let Some(graph) = &self.compiled_graph else {
+            return Err("No compiled ModelGraph available to export".into());
+        };
+        let struct_name = if self.model_source.is_imported() {
+            "ImportedModel"
+        } else {
+            "GestureNeuralNet"
+        };
+        let files = embedded_nn_codegen::generate_c_project_bundle(struct_name, graph);
+        for f in files {
+            let out_path = target_dir.join(&f.path);
+            if let Some(parent) = out_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            std::fs::write(&out_path, f.content)
+                .map_err(|e| format!("Failed writing {}: {e}", out_path.display()))?;
+        }
+        let contract_path = target_dir.join("dsp_contract.json");
+        let json = serde_json::to_string_pretty(&self.dsp.to_contract())
+            .map_err(|error| format!("DSP contract serialize failed: {error}"))?;
+        std::fs::write(&contract_path, json)
+            .map_err(|error| format!("DSP contract export failed: {error}"))?;
+        Ok(format!(
+            "Exported C99 CMake project to {}",
+            target_dir.display()
         ))
     }
 
@@ -2138,5 +2226,48 @@ mod tests {
             "Burn QAT accuracy must be >= 70%, got {}%",
             qat_acc
         );
+    }
+
+    #[test]
+    fn test_export_model_c_header_and_project_packs() {
+        let state = StudioState::default();
+        let temp_dir = std::env::temp_dir().join("embedded_nn_export_test");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        // 1. Export Rust model.rs & dsp_contract.json
+        let rust_file = temp_dir.join("model.rs");
+        let res_rust = state.export_model_bundle(&rust_file);
+        assert!(res_rust.is_ok());
+        assert!(rust_file.exists());
+        assert!(temp_dir.join("dsp_contract.json").exists());
+
+        // 2. Export C99 model.h & dsp_contract.json
+        let c_file = temp_dir.join("model.h");
+        let res_c = state.export_c_header(&c_file);
+        assert!(res_c.is_ok());
+        assert!(c_file.exists());
+
+        // 3. Export Rust Crate Pack
+        let crate_dir = temp_dir.join("rust_crate");
+        let res_crate = state.export_rust_crate(&crate_dir);
+        assert!(res_crate.is_ok());
+        assert!(crate_dir.join("Cargo.toml").exists());
+        assert!(crate_dir.join("src/lib.rs").exists());
+        assert!(crate_dir.join("README.md").exists());
+        assert!(crate_dir.join("dsp_contract.json").exists());
+
+        // 4. Export C99 CMake Project Pack
+        let c_dir = temp_dir.join("c_project");
+        let res_c_proj = state.export_c_project(&c_dir);
+        assert!(res_c_proj.is_ok());
+        assert!(c_dir.join("CMakeLists.txt").exists());
+        assert!(c_dir.join("Makefile").exists());
+        assert!(c_dir.join("include/gestureneuralnet.h").exists());
+        assert!(c_dir.join("src/main.c").exists());
+        assert!(c_dir.join("README.md").exists());
+        assert!(c_dir.join("dsp_contract.json").exists());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

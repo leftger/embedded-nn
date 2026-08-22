@@ -7,10 +7,18 @@ use std::path::Path;
 /// Inner/outer margins of an `egui` group frame, which shrink the space usable by its contents.
 const GROUP_VERTICAL_PADDING: f32 = 16.0;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CodegenLanguage {
+    #[default]
+    Rust,
+    C99,
+}
+
 #[derive(Default)]
 pub struct CodegenView {
     pub copy_status: Option<String>,
     pub selected_test_sample_idx: usize,
+    pub selected_lang: CodegenLanguage,
 }
 
 impl CodegenView {
@@ -18,6 +26,7 @@ impl CodegenView {
         Self {
             copy_status: None,
             selected_test_sample_idx: 0,
+            selected_lang: CodegenLanguage::Rust,
         }
     }
 
@@ -47,7 +56,7 @@ impl CodegenView {
         }
 
         ui.horizontal(|ui| {
-            ui.heading("⚡ 5. Zero-Allocation #![no_std] Rust Code Generator & HIL Playground");
+            ui.heading("⚡ 5. Zero-Allocation Code Generator & HIL Playground");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add_enabled(
@@ -56,29 +65,52 @@ impl CodegenView {
                     )
                     .clicked()
                 {
-                    self.copy_status =
-                        Some(match state.export_model_bundle(Path::new("model.rs")) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_file_name("model.rs")
+                        .add_filter("Rust Source", &["rs"])
+                        .save_file()
+                    {
+                        self.copy_status = Some(match state.export_model_bundle(&path) {
                             Ok(message) => message,
                             Err(error) => error,
                         });
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        self.copy_status =
+                            Some(match state.export_model_bundle(Path::new("model.rs")) {
+                                Ok(message) => message,
+                                Err(error) => error,
+                            });
+                    }
                 }
 
                 if ui
                     .add_enabled(
                         state.export_enabled() && state.compiled_graph.is_some(),
-                        egui::Button::new("📦 C99 CMake Pack"),
+                        egui::Button::new("💾 Export model.h"),
                     )
                     .clicked()
                 {
-                    if let Some(graph) = &state.compiled_graph {
-                        let files = embedded_nn_codegen::generate_c_project_bundle("embedded_model", graph);
-                        for f in files {
-                            if let Some(parent) = Path::new(&f.path).parent() {
-                                let _ = std::fs::create_dir_all(parent);
-                            }
-                            let _ = std::fs::write(&f.path, f.content);
-                        }
-                        self.copy_status = Some("Exported C99 project pack (include/embedded_model.h, CMakeLists.txt, Makefile, main.c)!".into());
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_file_name("model.h")
+                        .add_filter("C Header", &["h"])
+                        .save_file()
+                    {
+                        self.copy_status = Some(match state.export_c_header(&path) {
+                            Ok(message) => message,
+                            Err(error) => error,
+                        });
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        self.copy_status =
+                            Some(match state.export_c_header(Path::new("model.h")) {
+                                Ok(message) => message,
+                                Err(error) => error,
+                            });
                     }
                 }
 
@@ -89,15 +121,48 @@ impl CodegenView {
                     )
                     .clicked()
                 {
-                    if let Some(graph) = &state.compiled_graph {
-                        let files = embedded_nn_codegen::generate_rust_crate_bundle("embedded_model", graph);
-                        for f in files {
-                            if let Some(parent) = Path::new(&f.path).parent() {
-                                let _ = std::fs::create_dir_all(parent);
-                            }
-                            let _ = std::fs::write(&f.path, f.content);
-                        }
-                        self.copy_status = Some("Exported Rust #![no_std] crate pack (Cargo.toml, src/lib.rs)!".into());
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_title("Select Folder to Export Rust Crate")
+                        .pick_folder()
+                    {
+                        self.copy_status = Some(match state.export_rust_crate(&path) {
+                            Ok(message) => message,
+                            Err(error) => error,
+                        });
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        self.copy_status = Some(match state.export_rust_crate(Path::new(".")) {
+                            Ok(message) => message,
+                            Err(error) => error,
+                        });
+                    }
+                }
+
+                if ui
+                    .add_enabled(
+                        state.export_enabled() && state.compiled_graph.is_some(),
+                        egui::Button::new("📦 C99 CMake Pack"),
+                    )
+                    .clicked()
+                {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_title("Select Folder to Export C99 CMake Project")
+                        .pick_folder()
+                    {
+                        self.copy_status = Some(match state.export_c_project(&path) {
+                            Ok(message) => message,
+                            Err(error) => error,
+                        });
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        self.copy_status = Some(match state.export_c_project(Path::new(".")) {
+                            Ok(message) => message,
+                            Err(error) => error,
+                        });
                     }
                 }
 
@@ -105,8 +170,26 @@ impl CodegenView {
                     .add_enabled(state.export_enabled(), egui::Button::new("📋 Copy Code"))
                     .clicked()
                 {
-                    ui.ctx().copy_text(state.generated_rust_code.clone());
-                    self.copy_status = Some("Rust code copied to clipboard!".into());
+                    let text = match self.selected_lang {
+                        CodegenLanguage::Rust => state.generated_rust_code.clone(),
+                        CodegenLanguage::C99 => state
+                            .compiled_graph
+                            .as_ref()
+                            .map(|g| {
+                                let struct_name = if state.model_source.is_imported() {
+                                    "ImportedModel"
+                                } else {
+                                    "GestureNeuralNet"
+                                };
+                                embedded_nn_codegen::CCodeGenerator::new(struct_name).generate(g)
+                            })
+                            .unwrap_or_default(),
+                    };
+                    ui.ctx().copy_text(text);
+                    self.copy_status = Some(format!(
+                        "{:?} code copied to clipboard!",
+                        self.selected_lang
+                    ));
                 }
 
                 if let Some(status) = &self.copy_status {
@@ -338,11 +421,23 @@ impl CodegenView {
                 }
             });
 
-            // Right Column: Generated #![no_std] Rust Source Code with Syntax Highlighting
+            // Right Column: Generated Code with Language Switcher and Syntax Highlighting
             cols[1].set_min_height(column_height);
             cols[1].group(|ui| {
                 ui.set_min_height(column_height - GROUP_VERTICAL_PADDING);
-                ui.label("📄 Generated #![no_std] Rust Module");
+                ui.horizontal(|ui| {
+                    ui.label("📄 Generated Code:");
+                    ui.selectable_value(
+                        &mut self.selected_lang,
+                        CodegenLanguage::Rust,
+                        "🦀 #![no_std] Rust",
+                    );
+                    ui.selectable_value(
+                        &mut self.selected_lang,
+                        CodegenLanguage::C99,
+                        "🇨 C99 Header",
+                    );
+                });
                 ui.separator();
 
                 let mut layouter = |ui: &egui::Ui, text: &str, wrap_width: f32| {
@@ -351,12 +446,28 @@ impl CodegenView {
                     ui.fonts(|f| f.layout_job(layout_job))
                 };
 
+                let mut displayed_code = match self.selected_lang {
+                    CodegenLanguage::Rust => state.generated_rust_code.clone(),
+                    CodegenLanguage::C99 => state
+                        .compiled_graph
+                        .as_ref()
+                        .map(|g| {
+                            let struct_name = if state.model_source.is_imported() {
+                                "ImportedModel"
+                            } else {
+                                "GestureNeuralNet"
+                            };
+                            embedded_nn_codegen::CCodeGenerator::new(struct_name).generate(g)
+                        })
+                        .unwrap_or_default(),
+                };
+
                 egui::ScrollArea::vertical()
-                    .id_salt("codegen_rust_code_scroll")
+                    .id_salt("codegen_code_scroll")
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
                         ui.add(
-                            egui::TextEdit::multiline(&mut state.generated_rust_code)
+                            egui::TextEdit::multiline(&mut displayed_code)
                                 .font(egui::TextStyle::Monospace)
                                 .layouter(&mut layouter)
                                 .lock_focus(true)

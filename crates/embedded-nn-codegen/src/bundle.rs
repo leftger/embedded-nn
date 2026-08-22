@@ -108,13 +108,57 @@ clean:
         content: makefile,
     });
 
+    // 5. README.md
+    let readme = format!(
+        r#"# {model_name} C99 Embedded Inference Package
+
+Auto-generated zero-allocation C99 inference package using `embedded-nn`.
+
+## Integration
+
+1. Add `include/{name_lower}.h` to your MCU firmware project include path.
+2. Allocate static input, output, and arena buffers:
+   ```c
+   #include "{name_lower}.h"
+
+   static uint8_t arena[{name_upper}_ARENA_SIZE_BYTES];
+   static int8_t input[{name_upper}_INPUT_DIM];
+   static int8_t output[{name_upper}_OUTPUT_DIM];
+
+   int main(void) {{
+       // Populate input features...
+       int status = {name_lower}_predict(input, output, arena);
+       if (status == 0) {{
+           // Use output logits...
+       }}
+   }}
+   ```
+
+## Standalone Host Build
+
+```bash
+mkdir build && cd build
+cmake ..
+make
+./{name_lower}_demo
+```
+"#
+    );
+    files.push(BundleFile {
+        path: "README.md".into(),
+        content: readme,
+    });
+
     files
 }
 
 /// Generates a standalone `#![no_std]` Rust crate bundle.
 pub fn generate_rust_crate_bundle(model_name: &str, graph: &ModelGraph) -> Vec<BundleFile> {
     let mut files = Vec::new();
-    let name_lower = model_name.to_lowercase().replace(' ', "_");
+    let name_lower = model_name
+        .to_lowercase()
+        .replace(' ', "_")
+        .replace('-', "_");
 
     let rust_code = RustCodeGenerator::new(model_name).generate(graph);
 
@@ -124,9 +168,15 @@ pub fn generate_rust_crate_bundle(model_name: &str, graph: &ModelGraph) -> Vec<B
 name = "{name_lower}"
 version = "0.1.0"
 edition = "2024"
+description = "Auto-generated zero-allocation #![no_std] neural network crate for {model_name}"
 
 [dependencies]
-embedded-nn = {{ version = "0.2", default-features = false, features = ["alloc"] }}
+embedded-nn = {{ version = "0.2", default-features = false }}
+
+[features]
+default = []
+alloc = ["embedded-nn/alloc"]
+dsp = ["embedded-nn/dsp"]
 "#
     );
     files.push(BundleFile {
@@ -138,6 +188,32 @@ embedded-nn = {{ version = "0.2", default-features = false, features = ["alloc"]
     files.push(BundleFile {
         path: "src/lib.rs".into(),
         content: rust_code,
+    });
+
+    // 3. README.md
+    let readme = format!(
+        r#"# {model_name} #![no_std] Rust Inference Crate
+
+Auto-generated `#![no_std]` zero-heap neural network crate for `{model_name}` powered by `embedded-nn`.
+
+## Usage
+
+```rust
+use {name_lower}::{model_name};
+
+fn run_inference() {{
+    let mut arena = [0u8; {model_name}::ARENA_SIZE_BYTES];
+    let input = [0i8; {model_name}::INPUT_DIM];
+    let mut output = [0i8; {model_name}::OUTPUT_DIM];
+
+    {model_name}::predict(&input, &mut output, &mut arena).expect("inference succeeded");
+}}
+```
+"#
+    );
+    files.push(BundleFile {
+        path: "README.md".into(),
+        content: readme,
     });
 
     files
@@ -168,10 +244,11 @@ mod tests {
         let graph = builder.build();
 
         let bundle = generate_c_project_bundle("TinyNet", &graph);
-        assert_eq!(bundle.len(), 4);
+        assert_eq!(bundle.len(), 5);
         assert!(bundle.iter().any(|f| f.path == "include/tinynet.h"));
         assert!(bundle.iter().any(|f| f.path == "CMakeLists.txt"));
         assert!(bundle.iter().any(|f| f.path == "src/main.c"));
+        assert!(bundle.iter().any(|f| f.path == "README.md"));
     }
 
     #[test]
@@ -193,8 +270,9 @@ mod tests {
         let graph = builder.build();
 
         let bundle = generate_rust_crate_bundle("TinyNet", &graph);
-        assert_eq!(bundle.len(), 2);
+        assert_eq!(bundle.len(), 3);
         assert!(bundle.iter().any(|f| f.path == "Cargo.toml"));
         assert!(bundle.iter().any(|f| f.path == "src/lib.rs"));
+        assert!(bundle.iter().any(|f| f.path == "README.md"));
     }
 }
