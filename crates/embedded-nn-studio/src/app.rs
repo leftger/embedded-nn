@@ -71,6 +71,12 @@ impl eframe::App for EmbeddedNnStudioApp {
                     "Model source: {}",
                     self.state.model_source.display_name()
                 ));
+                if ui
+                    .button("⚡ Showcase End-to-End Gesture Pipeline")
+                    .clicked()
+                {
+                    self.state.reset_showcase_pipeline();
+                }
                 if ui.button("Open .tflite").clicked()
                     && let Some(path) = rfd::FileDialog::new()
                         .add_filter("TensorFlow Lite", &["tflite"])

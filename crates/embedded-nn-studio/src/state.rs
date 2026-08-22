@@ -432,6 +432,7 @@ impl StudioState {
     }
 
     /// Loads a multi-class synthetic IMU gesture dataset for instant interactive experimentation
+    /// Loads a multi-class 3-axis IMU gesture dataset for instant end-to-end showcase
     pub fn load_demo_dataset(&mut self) {
         self.samples.clear();
         self.next_sample_id = 1;
@@ -441,22 +442,39 @@ impl StudioState {
 
         for (class_idx, class_name) in self.classes.iter().enumerate() {
             for s in 0..num_samples_per_class {
-                let mut waveform = Vec::with_capacity(signal_length);
+                let mut waveform = Vec::with_capacity(signal_length * 3);
                 let phase_shift = (s as f32) * 0.15;
-                let noise_level = 0.08;
+                let noise_level = 0.05;
 
                 for t in 0..signal_length {
                     let time = (t as f32) / (signal_length as f32);
-                    let noise = (((t * 13 + s * 7) % 100) as f32 / 100.0 - 0.5) * noise_level;
+                    let noise_x = (((t * 13 + s * 7) % 100) as f32 / 100.0 - 0.5) * noise_level;
+                    let noise_y = (((t * 17 + s * 11) % 100) as f32 / 100.0 - 0.5) * noise_level;
+                    let noise_z = (((t * 19 + s * 13) % 100) as f32 / 100.0 - 0.5) * noise_level;
 
-                    let val = match class_idx {
-                        0 => 0.05 * (time * 2.0 * PI).sin() + noise, // idle: low amplitude drift
-                        1 => (2.0 * PI * (time * 1.5 + phase_shift)).sin() * 0.9 + noise, // wave_left: low-freq sweep
-                        2 => (2.0 * PI * (time * 3.5 + phase_shift)).sin() * 0.85 + noise, // wave_right: mid-freq sweep
-                        3 => (2.0 * PI * (time * 7.0 + phase_shift)).sin() * 0.95 + noise * 2.0, // shake: high-freq burst
-                        _ => 0.0,
+                    let (ax, ay, az) = match class_idx {
+                        0 => (noise_x, noise_y, 1.0 + noise_z), // idle: stable gravity baseline
+                        1 => (
+                            (2.0 * PI * (time * 1.5 + phase_shift)).sin() * 0.9 + noise_x,
+                            (4.0 * PI * (time * 1.5 + phase_shift)).sin() * 0.3 + noise_y,
+                            1.0 + (2.0 * PI * (time * 1.5 + phase_shift)).cos() * 0.2 + noise_z,
+                        ), // wave_left: horizontal arc sweep
+                        2 => (
+                            -(2.0 * PI * (time * 1.5 + phase_shift)).sin() * 0.9 + noise_x,
+                            -(4.0 * PI * (time * 1.5 + phase_shift)).sin() * 0.3 + noise_y,
+                            1.0 + (2.0 * PI * (time * 1.5 + phase_shift)).cos() * 0.2 + noise_z,
+                        ), // wave_right: reverse horizontal sweep
+                        3 => (
+                            (2.0 * PI * (time * 8.0 + phase_shift)).sin() * 0.8 + noise_x * 2.0,
+                            (2.0 * PI * (time * 8.0 + phase_shift)).cos() * 0.8 + noise_y * 2.0,
+                            1.0 + (2.0 * PI * (time * 16.0 + phase_shift)).sin() * 0.5
+                                + noise_z * 2.0,
+                        ), // shake: high-frequency 3D oscillation
+                        _ => (0.0, 0.0, 1.0),
                     };
-                    waveform.push(val);
+                    waveform.push(ax);
+                    waveform.push(ay);
+                    waveform.push(az);
                 }
 
                 let id = self.next_sample_id;
@@ -471,6 +489,15 @@ impl StudioState {
                 });
             }
         }
+    }
+
+    /// Resets and re-runs the entire pipeline end-to-end to showcase full capabilities.
+    pub fn reset_showcase_pipeline(&mut self) {
+        self.load_demo_dataset();
+        self.recompute_all_frames();
+        self.reset_training();
+        self.run_simulated_training(40);
+        self.rebuild_model_graph_and_codegen();
     }
 
     /// Index of `label` in `classes`, appending it as a new class if unseen
@@ -505,7 +532,18 @@ impl StudioState {
         let cfg = dsp.to_feature_config();
         let n_frames = cfg.num_frames();
         let mut flat = vec![0.0f32; n_frames * cfg.num_mel_bins];
-        let _ = extract_mel_sequence(&cfg, raw, &mut flat);
+
+        // If raw is 3D interleaved [ax, ay, az], compute vector magnitude per timestep
+        let signal: Vec<f32> =
+            if raw.len() >= 3 && raw.len() % 3 == 0 && raw.len() > dsp.capture_samples as usize {
+                raw.chunks_exact(3)
+                    .map(|c| (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt())
+                    .collect()
+            } else {
+                raw.to_vec()
+            };
+
+        let _ = extract_mel_sequence(&cfg, &signal, &mut flat);
         flat.chunks(cfg.num_mel_bins)
             .map(|frame| frame.to_vec())
             .collect()
