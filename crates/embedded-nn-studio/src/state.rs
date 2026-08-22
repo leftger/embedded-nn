@@ -1264,7 +1264,40 @@ impl StudioState {
             self.svdf_weights_time = report.svdf_weights_time;
             self.svdf_bias = report.svdf_bias;
         }
+
+        let mut correct = 0;
+        let mut conf_matrix = vec![vec![0; self.classes.len()]; self.classes.len()];
+        let num_classes = self.classes.len();
+        for sample in &self.samples {
+            if sample.frames.is_empty() {
+                continue;
+            }
+            let logits = match self.model_config.arch {
+                ModelArchitecture::DenseMLP => {
+                    let x = Self::mean_pool_frames(&sample.frames, num_inputs);
+                    self.forward_dense(&x).1
+                }
+                ModelArchitecture::TinyConv1D => self.forward_conv1d(&sample.frames).2,
+                ModelArchitecture::RecurrentSVDF => self.forward_svdf(&sample.frames).3,
+            };
+            let pred_class = logits
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(core::cmp::Ordering::Equal))
+                .map(|(idx, _)| idx)
+                .unwrap_or(0);
+
+            if pred_class == sample.class_idx {
+                correct += 1;
+            }
+            if sample.class_idx < num_classes && pred_class < num_classes {
+                conf_matrix[sample.class_idx][pred_class] += 1;
+            }
+        }
+        let accuracy = (correct as f32 / self.samples.len().max(1) as f32) * 100.0;
         self.train_loss_history.push(report.final_loss);
+        self.val_acc_history.push(accuracy);
+        self.confusion_matrix = conf_matrix;
         self.current_epoch = self.model_config.epochs;
         self.is_training = false;
         self.rebuild_model_graph_and_codegen();

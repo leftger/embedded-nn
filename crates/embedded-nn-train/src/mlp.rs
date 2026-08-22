@@ -204,6 +204,22 @@ pub fn train_dense_mlp(
     config: &TrainConfig,
 ) -> TrainReport {
     assert_eq!(features.len(), labels.len());
+    let n_samples = features.len();
+    if n_samples == 0 {
+        return TrainReport {
+            weights_fc1: Vec::new(),
+            bias_fc1: Vec::new(),
+            weights_fc2: Vec::new(),
+            bias_fc2: Vec::new(),
+            conv1d_weights: Vec::new(),
+            conv1d_bias: Vec::new(),
+            svdf_weights_feature: Vec::new(),
+            svdf_weights_time: Vec::new(),
+            svdf_bias: Vec::new(),
+            graph: embedded_nn_compiler::ir::ModelGraph::new("Empty"),
+            final_loss: 0.0,
+        };
+    }
     let device = Default::default();
     let mut model = Mlp::<TrainB>::new(
         config.num_inputs,
@@ -218,23 +234,23 @@ pub fn train_dense_mlp(
     let fake_quant = config.mode == TrainMode::Qat;
     let mut final_loss = 0.0f32;
 
+    let flat_features: Vec<f32> = features.iter().flat_map(|f| f.iter().copied()).collect();
+    let flat_labels: Vec<i64> = labels.iter().map(|&l| l as i64).collect();
+
+    let xt = Tensor::<TrainB, 2>::from_data(
+        TensorData::new(flat_features, [n_samples, config.num_inputs]),
+        &device,
+    );
+    let yt =
+        Tensor::<TrainB, 1, Int>::from_data(TensorData::new(flat_labels, [n_samples]), &device);
+
     for _ in 0..config.epochs.max(1) {
-        let mut epoch_loss = 0.0f32;
-        for (x, &y) in features.iter().zip(labels.iter()) {
-            let xt = Tensor::<TrainB, 2>::from_data(
-                TensorData::new(x.clone(), [1, config.num_inputs]),
-                &device,
-            );
-            let yt =
-                Tensor::<TrainB, 1, Int>::from_data(TensorData::new(vec![y as i64], [1]), &device);
-            let logits = model.forward(xt, fake_quant);
-            let loss = loss_fn.forward(logits, yt);
-            let value: f32 = loss.clone().into_data().to_vec::<f32>().expect("loss")[0];
-            epoch_loss += value;
-            let grads = GradientsParams::from_grads(loss.backward(), &model);
-            model = optim.step(config.learning_rate, model, grads);
-        }
-        final_loss = epoch_loss / features.len().max(1) as f32;
+        let logits = model.forward(xt.clone(), fake_quant);
+        let loss = loss_fn.forward(logits, yt.clone());
+        let loss_val: f32 = loss.clone().into_data().to_vec::<f32>().expect("loss")[0];
+        final_loss = loss_val;
+        let grads = GradientsParams::from_grads(loss.backward(), &model);
+        model = optim.step(config.learning_rate, model, grads);
     }
 
     let (weights_fc1, bias_fc1) = flatten_linear(&model.fc1, config.hidden, config.num_inputs);
