@@ -167,12 +167,7 @@ impl eframe::App for EmbeddedNnStudioApp {
             StudioTab::Gesture3D => {
                 let trajectory: Vec<[f32; 3]> = if let Some(sample) = self.state.samples.first() {
                     if sample.raw_waveform.len() >= 3 && sample.raw_waveform.len() % 3 == 0 {
-                        #[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
-                        sample
-                            .raw_waveform
-                            .chunks_exact(3)
-                            .map(|c| [c[0], c[1], c[2]])
-                            .collect()
+                        sample.raw_waveform.as_chunks::<3>().0.to_vec()
                     } else {
                         // Generate 3-axis projection from scalar magnitude
                         sample

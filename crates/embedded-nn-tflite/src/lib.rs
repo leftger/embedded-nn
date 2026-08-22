@@ -416,18 +416,13 @@ fn read_i32_buffer(
         .data()
         .ok_or(ImportError::MissingField("int32 constant buffer data"))?;
     let bytes: Vec<u8> = data.iter().collect();
-    // `as_chunks` isn't available at this workspace's MSRV (1.87); chunks_exact is fine here.
-    // `unknown_lints` allowed too since this lint doesn't exist on every clippy version CI runs.
-    #[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
-    let chunks = bytes.chunks_exact(4);
-    if !chunks.remainder().is_empty() {
+    let (chunks, remainder) = bytes.as_chunks::<4>();
+    if !remainder.is_empty() {
         return Err(ImportError::UnsupportedConfiguration(
             "INT32 constant buffer byte length is not divisible by four".into(),
         ));
     }
-    Ok(chunks
-        .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect())
+    Ok(chunks.iter().map(|c| i32::from_le_bytes(*c)).collect())
 }
 
 fn read_i32_bias_buffer(
@@ -439,13 +434,8 @@ fn read_i32_bias_buffer(
         .data()
         .ok_or(ImportError::MissingField("bias buffer data"))?;
     let bytes: Vec<u8> = data.iter().collect();
-    // `as_chunks` isn't available at this workspace's MSRV (1.87); chunks_exact is fine here.
-    // `unknown_lints` allowed too since this lint doesn't exist on every clippy version CI runs.
-    #[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
-    let chunks = bytes.chunks_exact(4);
-    Ok(chunks
-        .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect())
+    let (chunks, _) = bytes.as_chunks::<4>();
+    Ok(chunks.iter().map(|c| i32::from_le_bytes(*c)).collect())
 }
 
 /// `op_inputs[index]` is `-1` in TFLite when that input is optional and absent (e.g. no bias).

@@ -1560,8 +1560,9 @@ impl StudioState {
         // If raw is 3D interleaved [ax, ay, az], compute vector magnitude per timestep
         let signal: Vec<f32> =
             if raw.len() >= 3 && raw.len().is_multiple_of(3) && raw.len() > dsp.capture_samples {
-                #[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
-                raw.chunks_exact(3)
+                raw.as_chunks::<3>()
+                    .0
+                    .iter()
                     .map(|c| (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt())
                     .collect()
             } else {
