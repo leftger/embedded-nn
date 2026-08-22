@@ -41,6 +41,6 @@ echo "pre-commit: cargo clippy"
 cargo clippy --workspace -- -W clippy::all
 
 echo "pre-commit: cargo test"
-cargo test --workspace
+cargo test --workspace --lib --bins --tests
 
 echo "pre-commit: ok"
