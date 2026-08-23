@@ -90,3 +90,20 @@ enn dataset validate dataset.jsonl
 cargo run -p embedded-nn-studio
 ```
 
+## Model Zoo & Silicon Power / Battery Runtime Profiling
+
+The **embedded-nn Studio** provides pre-architected baseline neural networks and silicon specifications specifically tailored for the STM32WBA65RI:
+
+- **Hardware Specs**: 100 MHz Cortex-M33 (DSP + FPU), 512 KB SRAM, 2048 KB Flash, 8.5 mA active current.
+- **Model Zoo Presets**:
+  - `MicroSpeechDsCnn`: 2D Spectrogram DS-CNN for 4-class keyword spotting (~58 KB Flash, ~12 KB SRAM).
+  - `GestureResNet8`: 1D Temporal ResNet with skip connections for 6-axis IMU tracking (~76 KB Flash, ~14 KB SRAM).
+  - `VisualWakeWords`: MobileNetV1 0.25x grayscale classifier for vision wake words (~218 KB Flash, ~38 KB SRAM).
+  - `AnomalyAutoencoder`: Conv1D-Dense bottleneck autoencoder for vibration maintenance (~28 KB Flash, ~6 KB SRAM).
+  - `StreamingSvdf`: Dual-stage streaming delay-line filter (~32 KB Flash, ~8 KB SRAM).
+  - `SensorTransformer`: 1D Patch Tokenizer with Multi-Head Self-Attention (~92 KB Flash, ~18 KB SRAM).
+  - `SeMobileNetV3`: Squeeze-and-Excitation channel attention CNN (~180 KB Flash, ~32 KB SRAM).
+  - `DilatedSoundNet`: Multi-rate dilated temporal convolutions (~64 KB Flash, ~12 KB SRAM).
+- **Silicon Power & Battery Life Estimator**: Live MAC cycle counting with battery runtime prediction (CR2032, LiPo, AAA, 18650) based on inference duty cycle and low-power standby current.
+
+

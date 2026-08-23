@@ -10,6 +10,7 @@
 )]
 
 mod app;
+pub mod model_zoo;
 mod state;
 mod syntax;
 mod theme;

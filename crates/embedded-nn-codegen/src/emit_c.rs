@@ -58,15 +58,20 @@ impl CCodeGenerator {
         writeln!(out, "#include <stddef.h>").unwrap();
         writeln!(out, "#include <stdbool.h>\n").unwrap();
 
+        writeln!(out, "#ifdef __cplusplus").unwrap();
+        writeln!(out, "extern \"C\" {{").unwrap();
+        writeln!(out, "#endif\n").unwrap();
+
         writeln!(out, "#define {}_INPUT_DIM {}", name_upper, in_elements).unwrap();
         writeln!(out, "#define {}_OUTPUT_DIM {}", name_upper, out_elements).unwrap();
         writeln!(
             out,
-            "#define {}_ARENA_SIZE_BYTES {}\n",
+            "#define {}_ARENA_SIZE_BYTES {}",
             name_upper,
             arena.total_arena_bytes.max(64)
         )
         .unwrap();
+        writeln!(out, "#define {}_ARENA_ALIGNMENT 4\n", name_upper).unwrap();
 
         // Fixed-point C helpers
         writeln!(out, "/* --- Fixed-Point Math Helpers --- */").unwrap();
@@ -304,6 +309,9 @@ impl CCodeGenerator {
 
         writeln!(out, "    return 0;").unwrap();
         writeln!(out, "}}\n").unwrap();
+        writeln!(out, "#ifdef __cplusplus").unwrap();
+        writeln!(out, "}}").unwrap();
+        writeln!(out, "#endif\n").unwrap();
         writeln!(out, "#endif /* {}_H */", name_upper).unwrap();
 
         out

@@ -462,6 +462,8 @@ fn train_svdf(features: &[Vec<f32>], labels: &[usize], config: &TrainConfig) -> 
 }
 
 /// Dispatches Burn training for the configured architecture.
+/// Dispatches training across supported TinyML architectures (`DenseMlp`, `Conv1d`, `Svdf`)
+/// using Burn with post-training or quantization-aware quantization.
 pub fn train_model(features: &[Vec<f32>], labels: &[usize], config: &TrainConfig) -> TrainReport {
     match config.arch {
         TrainArch::DenseMlp => train_dense_mlp(features, labels, config),
