@@ -73,8 +73,8 @@ The `data_collector` binary provides high-speed sensor acquisition and dataset p
 # Check compilation
 cargo check --bin data_collector
 
-# Flash and run via probe-rs
-probe-rs run --chip STM32WBA65RI --bin data_collector
+# Flash and run via cargo (using configured probe-rs runner)
+cargo run --bin data_collector
 ```
 
 Press **User Button B1** (`PC13`) to record a 128-sample burst at 100 Hz. The firmware serializes the burst into the canonical `.jsonl` schema:

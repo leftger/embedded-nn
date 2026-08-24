@@ -80,8 +80,8 @@ The `data_collector` application runs an asynchronous Embassy loop that acquires
 # Navigate to the WBA65 example directory
 cd examples/stm32wba65ri
 
-# Flash and stream logs via probe-rs
-probe-rs run --chip STM32WBA65RI --bin data_collector
+# Flash and stream logs via cargo (configured with probe-rs runner)
+cargo run --bin data_collector
 ```
 
 ### Performing Captures
@@ -195,7 +195,7 @@ match prediction {
 cd examples/stm32wba65ri
 
 # Compile and flash to target board
-probe-rs run --chip STM32WBA65RI --bin embedded-nn-stm32wba65ri
+cargo run --bin embedded-nn-stm32wba65ri
 ```
 
 ### Live HIL (Hardware-In-The-Loop) Verification over USB-HS
@@ -204,7 +204,7 @@ To test and benchmark inferences directly from your PC host over high-speed USB:
 
 ```bash
 # Flash the USB HIL agent
-probe-rs run --chip STM32WBA65RI --features hil-usb --bin hil_agent
+cargo run --features hil-usb --bin hil_agent
 
 # Ping target agent over USB bulk
 enn hil ping

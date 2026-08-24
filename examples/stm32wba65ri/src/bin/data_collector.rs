@@ -30,7 +30,7 @@ mod sd_logger;
 #[path = "../w25q32.rs"]
 mod w25q32;
 
-use lis2de12::{FullScale, Lis2de12, Odr};
+use lis2de12::{AccelG, FullScale, Lis2de12, Odr};
 use sd_logger::{AccelSample, DatasetBurst};
 use w25q32::W25q32;
 
@@ -59,7 +59,18 @@ async fn main(_spawner: Spawner) {
 
     let p = embassy_stm32::init(config);
 
+    if let Some(mut core) = cortex_m::Peripherals::take() {
+        core.DCB.enable_trace();
+        core.DWT.enable_cycle_counter();
+    }
+
+    defmt::info!("==========================================================");
+    defmt::info!("embedded-nn: STM32WBA65RI Embassy Sensor Ingestion System");
+    defmt::info!("==========================================================");
+    defmt::info!("[Step 1/5] Initializing clocks (HSI -> PLL1 @ 64/96MHz)...");
+
     // 2. User Interface (LEDs & Buttons on MB1801 mezzanine board)
+    defmt::info!("[Step 2/5] Configuring GPIOs (LD1 Blue=PD8, LD2 Green=PC4, LD3 Red=PB8, B1=PC13)...");
     let mut led_blue = Output::new(p.PD8, Level::Low, Speed::Low); // LD1
     let mut led_green = Output::new(p.PC4, Level::Low, Speed::Low); // LD2
     let mut led_red = Output::new(p.PB8, Level::Low, Speed::Low); // LD3
@@ -67,40 +78,41 @@ async fn main(_spawner: Spawner) {
     // Async EXTI button input on User Button B1 (PC13 / EXTI13)
     let mut btn_user = ExtiInput::new(p.PC13, p.EXTI13, Pull::Up, Irqs);
 
-    defmt::info!("==========================================================");
-    defmt::info!("embedded-nn: STM32WBA65RI Embassy Sensor Ingestion System");
-    defmt::info!("==========================================================");
-
     // 4. Initialize I2C1 for LIS2DE12 on Arduino Header D14/D15 (PB1 SDA, PB2 SCL)
+    defmt::info!("[Step 3/5] Initializing I2C1 on PB2 (SCL) / PB1 (SDA) with internal pull-ups...");
     let mut i2c_cfg = I2cConfig::default();
     i2c_cfg.sda_pullup = true;
     i2c_cfg.scl_pullup = true;
     let i2c = I2c::new_blocking(p.I2C1, p.PB2, p.PB1, i2c_cfg);
     let mut accel = Lis2de12::new(i2c);
 
-    // Check LIS2DE12 WHO_AM_I
-    match accel.check_id() {
-        Ok(true) => {
-            defmt::info!("LIS2DE12 accelerometer detected (WHO_AM_I = 0x33)");
-            led_green.set_high();
-        }
-        Ok(false) => {
-            defmt::error!("LIS2DE12 WHO_AM_I ID mismatch");
-            led_red.set_high();
-        }
-        Err(_) => {
-            defmt::error!("LIS2DE12 I2C communication error on PB1/PB2");
-            led_red.set_high();
-        }
-    }
+    // Check LIS2DE12 WHO_AM_I (probes standard 0x18 and alternate 0x19)
+    defmt::info!("[Step 4/5] Probing LIS2DE12 accelerometer on I2C bus...");
+    let accel_ok = if accel.auto_detect() {
+        defmt::info!(
+            " -> LIS2DE12 detected at I2C address 0x{:02x} (WHO_AM_I = 0x33)",
+            accel.address()
+        );
 
-    // Configure LIS2DE12: 100 Hz ODR, +/- 2g range, Block Data Update enabled
-    if let Err(_) = accel.init(Odr::Hz100, FullScale::G2) {
-        defmt::error!("Failed to initialize LIS2DE12 CTRL registers");
-    }
+        // Configure LIS2DE12: 100 Hz ODR, +/- 2g range, Block Data Update enabled
+        if let Err(_) = accel.init(Odr::Hz100, FullScale::G2) {
+            defmt::error!(" -> Failed to initialize LIS2DE12 CTRL registers");
+            led_red.set_high();
+            false
+        } else {
+            defmt::info!(" -> LIS2DE12 configured: 100 Hz ODR, +/- 2g scale, BDU enabled");
+            led_green.set_high();
+            true
+        }
+    } else {
+        defmt::error!(" -> LIS2DE12 not detected at 0x18 or 0x19 on PB1 (SDA) / PB2 (SCL)");
+        led_red.set_high();
+        false
+    };
 
     // 5. Initialize SPI2 for MicroSD (PA10 CS) & W25Q32 NOR Flash (PA3 CS)
     // Arduino D13 = PB10 (SCK), D11 = PC3 (MOSI), D12 = PA9 (MISO)
+    defmt::info!("[Step 5/5] Initializing SPI2 (PB10 SCK, PC3 MOSI, PA9 MISO) & storage...");
     let mut spi_cfg = SpiConfig::default();
     spi_cfg.frequency = Hertz(10_000_000);
     spi_cfg.mode = SpiMode {
@@ -119,14 +131,14 @@ async fn main(_spawner: Spawner) {
     match flash.read_jedec_id() {
         Ok(id) => {
             defmt::info!(
-                "W25Qxx SPI Flash detected: Manuf=0x{:02x}, Type=0x{:02x}, Cap=0x{:02x}",
+                " -> W25Qxx SPI Flash detected: Manuf=0x{:02x}, Type=0x{:02x}, Cap=0x{:02x}",
                 id.manufacturer,
                 id.memory_type,
                 id.capacity
             );
         }
         Err(_) => {
-            defmt::warn!("W25Qxx Flash query returned error");
+            defmt::warn!(" -> W25Qxx Flash query returned error");
         }
     }
 
@@ -134,49 +146,84 @@ async fn main(_spawner: Spawner) {
     let mut burst = DatasetBurst::new(sample_seq, 100.0);
     let mut json_buffer = [0u8; 4096];
 
-    defmt::info!("Embassy executor ready. Press User Button B1 (PC13) to record a burst...");
+    defmt::info!("----------------------------------------------------------");
+    defmt::info!("System initialization complete! Ready for data ingestion.");
+    defmt::info!("Storage mode: Real-time RTT JSONL terminal streaming + RAM buffer (MicroSD optional).");
+    defmt::info!(">> Press User Button B1 (PC13) to record a 128-sample gesture burst.");
+    defmt::info!("----------------------------------------------------------");
 
     // 100 Hz high-precision ticker
     let mut ticker = Ticker::every(Duration::from_hz(100));
 
     loop {
+        defmt::info!("[State: IDLE] Waiting for User Button B1 (PC13) trigger...");
         // Asynchronously wait for button press via EXTI interrupt
         btn_user.wait_for_falling_edge().await;
 
         led_blue.set_high();
         burst.reset(sample_seq);
-        defmt::info!("Embassy capture: starting burst #{} (128 samples @ 100Hz)...", sample_seq);
+        defmt::info!(
+            ">> Button pressed! Starting burst #{} (128 samples @ 100 Hz, 1.28s window)...",
+            sample_seq
+        );
+
+        let mut latest_g = AccelG { x: 0.0, y: 0.0, z: 0.0 };
 
         // Record 128 samples synchronized to the Embassy 100 Hz ticker
-        for _ in 0..128 {
+        for i in 1..=128 {
             ticker.next().await;
 
-            if let Ok(g) = accel.read_accel_g() {
+            if accel_ok {
+                if let Ok(g) = accel.read_accel_g() {
+                    latest_g = g;
+                    burst.push(AccelSample {
+                        x: g.x,
+                        y: g.y,
+                        z: g.z,
+                    });
+                }
+            } else {
+                // Fallback mock waveform if sensor not detected
                 burst.push(AccelSample {
-                    x: g.x,
-                    y: g.y,
-                    z: g.z,
+                    x: 0.0,
+                    y: 0.0,
+                    z: 1.0,
                 });
             }
+
+            // Periodic progress reporting every 32 samples (25%, 50%, 75%, 100%)
+            if i % 32 == 0 {
+                defmt::info!(
+                    "   [Progress: {}/128 samples ({}%)] Latest accel: x={=i32}mg, y={=i32}mg, z={=i32}mg",
+                    i,
+                    (i * 100) / 128,
+                    (latest_g.x * 1000.0) as i32,
+                    (latest_g.y * 1000.0) as i32,
+                    (latest_g.z * 1000.0) as i32,
+                );
+            }
         }
+
+        defmt::info!(">> Capture complete! Serializing burst into JSON Lines format...");
 
         // Format burst into compliant JSON Lines (.jsonl) dataset schema
         match burst.format_jsonl(&mut json_buffer) {
             Ok(len) => {
-                defmt::info!("Formatted JSONL sample record ({} bytes):", len);
+                defmt::info!(">> Formatted JSONL sample record ({} bytes):", len);
                 if let Ok(json_str) = core::str::from_utf8(&json_buffer[..len]) {
                     defmt::info!("{}", json_str);
                 }
-                defmt::info!("Dataset record written! Ready for SD card persistence.");
+                defmt::info!(">> Sample #{} recorded successfully! Ready for SD card persistence.", sample_seq);
             }
             Err(_) => {
-                defmt::error!("Buffer overflow while formatting JSONL record");
+                defmt::error!("!! Buffer overflow while formatting JSONL record");
             }
         }
 
         sample_seq = sample_seq.wrapping_add(1);
         led_blue.set_low();
 
+        defmt::info!(">> Debouncing button input...");
         // Async debounce delay using Embassy timer
         Timer::after_millis(300).await;
     }

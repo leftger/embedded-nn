@@ -181,19 +181,51 @@ impl<I2C: embedded_hal::i2c::I2c> Lis2de12<I2C> {
         Ok(id[0] == WHO_AM_I_VAL)
     }
 
+    /// Auto-detect LIS2DE12 by probing standard (0x18) and alternate (0x19) addresses.
+    /// Updates `self.addr` to the responding address if found.
+    pub fn auto_detect(&mut self) -> bool {
+        for &test_addr in &[LIS2DE12_I2C_ADDR, LIS2DE12_I2C_ADDR_ALT] {
+            defmt::info!("[LIS2DE12] Probing I2C address 0x{:02x} for WHO_AM_I (0x33)...", test_addr);
+            let mut id = [0u8; 1];
+            match self.i2c.write_read(test_addr, &[Register::WhoAmI.addr()], &mut id) {
+                Ok(()) => {
+                    defmt::info!("[LIS2DE12] Response from 0x{:02x}: WHO_AM_I = 0x{:02x}", test_addr, id[0]);
+                    if id[0] == WHO_AM_I_VAL {
+                        self.addr = test_addr;
+                        return true;
+                    } else {
+                        defmt::warn!("[LIS2DE12] Device at 0x{:02x} returned unexpected ID 0x{:02x} (expected 0x33)", test_addr, id[0]);
+                    }
+                }
+                Err(_) => {
+                    defmt::debug!("[LIS2DE12] No response / NACK from address 0x{:02x}", test_addr);
+                }
+            }
+        }
+        false
+    }
+
+    /// Return the active I2C address.
+    pub const fn address(&self) -> u8 {
+        self.addr
+    }
+
     /// Initialize sensor with specified ODR and Full-Scale range.
     pub fn init(&mut self, odr: Odr, fs: FullScale) -> Result<(), I2C::Error> {
         self.full_scale = fs;
 
+        defmt::info!("[LIS2DE12] Configuring CTRL_REG1 (ODR=100Hz, all axes enabled)...");
         // CTRL_REG1: ODR[3:0] | LPen (0 for normal/HR) | Zen (1) | Yen (1) | Xen (1)
         let ctrl1 = ((odr as u8) << 4) | 0x07;
         self.i2c.write(self.addr, &[Register::CtrlReg1.addr(), ctrl1])?;
 
+        defmt::info!("[LIS2DE12] Configuring CTRL_REG4 (BDU=1, FS=+/-2g, HR=1)...");
         // CTRL_REG4: BDU (bit 7 = 1) | BLE (0) | FS[1:0] (bits 5:4) | HR (bit 3 = 1)
         let fs_bits = (fs as u8) << 4;
         let ctrl4 = 0x80 | fs_bits | 0x08;
         self.i2c.write(self.addr, &[Register::CtrlReg4.addr(), ctrl4])?;
 
+        defmt::info!("[LIS2DE12] Configuration registers written successfully");
         Ok(())
     }
 
