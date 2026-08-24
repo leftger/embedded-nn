@@ -254,12 +254,19 @@ impl IngestView {
 
         ui.add_space(8.0);
 
-        // Update live waveform stream
-        self.live_time_counter += 0.05;
-        let t = self.live_time_counter;
-        let new_sample = (t * 2.5).sin() * 0.7 + (t * 7.0).cos() * 0.2;
-        self.live_sensor_history.remove(0);
-        self.live_sensor_history.push(new_sample);
+        // Advance the pseudo-generated waveform only while there is no
+        // handshaked real device; otherwise real `SensorFrame` samples
+        // (appended above) are the sole source for the oscilloscope.
+        let using_real_device = device_link
+            .as_ref()
+            .is_some_and(|link| link.is_handshaked());
+        if !using_real_device {
+            self.live_time_counter += 0.05;
+            let t = self.live_time_counter;
+            let new_sample = (t * 2.5).sin() * 0.7 + (t * 7.0).cos() * 0.2;
+            self.live_sensor_history.remove(0);
+            self.live_sensor_history.push(new_sample);
+        }
 
         // Live Oscilloscope & Class Balance Layout
         ui.columns(2, |cols| {
