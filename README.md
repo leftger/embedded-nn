@@ -1,5 +1,9 @@
 # embedded-nn
 
+<p align="center">
+  <img src="assets/aztec_rustacean.png" alt="embedded-nn" width="100%">
+</p>
+
 [![crates.io](https://img.shields.io/crates/v/embedded-nn.svg)](https://crates.io/crates/embedded-nn)
 [![docs.rs](https://img.shields.io/docsrs/embedded-nn)](https://docs.rs/embedded-nn)
 [![CI](https://github.com/leftger/embedded-nn/actions/workflows/ci.yml/badge.svg)](https://github.com/leftger/embedded-nn/actions/workflows/ci.yml)
