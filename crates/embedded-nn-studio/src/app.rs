@@ -160,30 +160,17 @@ impl eframe::App for EmbeddedNnStudioApp {
             });
         });
 
+        // Drain the device on every frame, not just while Ingest is visible,
+        // so the 3D gesture view sees a live trajectory too.
+        self.ingest_view.poll_device(&self.device_link);
+
         egui::CentralPanel::default().show(ctx, |ui| match self.current_tab {
             StudioTab::Ingest => self
                 .ingest_view
                 .show(ui, &mut self.state, &mut self.device_link),
             StudioTab::Gesture3D => {
-                let trajectory: Vec<[f32; 3]> = if let Some(sample) = self.state.samples.first() {
-                    if sample.raw_waveform.len() >= 3 && sample.raw_waveform.len() % 3 == 0 {
-                        sample.raw_waveform.as_chunks::<3>().0.to_vec()
-                    } else {
-                        // Generate 3-axis projection from scalar magnitude
-                        sample
-                            .raw_waveform
-                            .iter()
-                            .enumerate()
-                            .map(|(i, &m)| {
-                                let phase = i as f32 * 0.1;
-                                [m * phase.cos(), m * phase.sin(), m]
-                            })
-                            .collect()
-                    }
-                } else {
-                    Vec::new()
-                };
-                self.gesture_view.ui(ui, &trajectory);
+                let live = self.ingest_view.live_trajectory();
+                self.gesture_view.ui(ui, &self.state, live.as_deref());
             }
             StudioTab::Dsp => self.dsp_view.show(ui, &mut self.state),
             StudioTab::Train => self.train_view.show(ui, &mut self.state),

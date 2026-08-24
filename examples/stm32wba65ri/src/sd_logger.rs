@@ -39,7 +39,11 @@ impl DatasetBurst {
         Self {
             sample_id,
             sample_rate_hz,
-            samples: [AccelSample { x: 0.0, y: 0.0, z: 0.0 }; MAX_BURST_SAMPLES],
+            samples: [AccelSample {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            }; MAX_BURST_SAMPLES],
             count: 0,
         }
     }
@@ -265,7 +269,11 @@ impl<SPI: SpiBus, CS: OutputPin> SpiSdCard<SPI, CS> {
     }
 
     /// Write a single 512-byte block to the SD Card (CMD24).
-    pub fn write_block(&mut self, block_address: u32, data: &[u8; SD_BLOCK_SIZE]) -> Result<bool, SPI::Error> {
+    pub fn write_block(
+        &mut self,
+        block_address: u32,
+        data: &[u8; SD_BLOCK_SIZE],
+    ) -> Result<bool, SPI::Error> {
         let addr = if self.is_sdhc {
             block_address
         } else {
@@ -328,8 +336,16 @@ mod tests {
     #[test]
     fn test_jsonl_formatter_output() {
         let mut burst = JsonlRecordFormatter::new(1, 100.0);
-        assert!(burst.push(AccelSample { x: 0.12, y: -0.34, z: 0.98 }));
-        assert!(burst.push(AccelSample { x: 0.15, y: -0.30, z: 0.95 }));
+        assert!(burst.push(AccelSample {
+            x: 0.12,
+            y: -0.34,
+            z: 0.98
+        }));
+        assert!(burst.push(AccelSample {
+            x: 0.15,
+            y: -0.30,
+            z: 0.95
+        }));
 
         let mut buf = [0u8; 512];
         let written = burst.format_jsonl(&mut buf).unwrap();

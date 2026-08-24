@@ -31,6 +31,21 @@ impl DatasetRecord {
             .collect()
     }
 
+    /// The per-axis motion path, for 3-axis records only. Empty otherwise,
+    /// since a scalar or 6-DOF record has no single unambiguous XYZ path.
+    pub fn xyz_trajectory(&self) -> Vec<[f32; 3]> {
+        if self.channel_count() != 3 {
+            return Vec::new();
+        }
+        self.waveform
+            .iter()
+            .map(|step| match step.as_slice() {
+                [x, y, z] => [*x, *y, *z],
+                _ => [0.0; 3],
+            })
+            .collect()
+    }
+
     /// Number of distinct sensor channels in this record.
     pub fn channel_count(&self) -> usize {
         self.channel_names.len()
@@ -116,6 +131,16 @@ mod tests {
         let mut r = record(vec![vec![-1.5], vec![0.25]]);
         r.channel_names = vec!["value".into()];
         assert_eq!(r.scalar_channel(), vec![-1.5, 0.25]);
+    }
+
+    #[test]
+    fn xyz_trajectory_kept_for_three_axis_records_only() {
+        let r = record(vec![vec![3.0, 4.0, 0.0], vec![0.0, 0.0, 2.0]]);
+        assert_eq!(r.xyz_trajectory(), vec![[3.0, 4.0, 0.0], [0.0, 0.0, 2.0]]);
+
+        let mut scalar = record(vec![vec![-1.5], vec![0.25]]);
+        scalar.channel_names = vec!["value".into()];
+        assert!(scalar.xyz_trajectory().is_empty());
     }
 
     #[test]

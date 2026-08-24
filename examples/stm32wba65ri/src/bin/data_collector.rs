@@ -13,6 +13,7 @@
 use defmt_rtt as _;
 use panic_probe as _;
 
+use accelerometer::vector::F32x3;
 use embassy_executor::Spawner;
 use embassy_stm32::dma;
 use embassy_stm32::exti::{self, ExtiInput};
@@ -21,9 +22,8 @@ use embassy_stm32::i2c::{self, Config as I2cConfig, I2c};
 use embassy_stm32::rcc::*;
 use embassy_stm32::spi::{BitOrder, Config as SpiConfig, Mode as SpiMode, Phase, Polarity, Spi};
 use embassy_stm32::time::Hertz;
-use embassy_stm32::{bind_interrupts, interrupt, peripherals, Config};
+use embassy_stm32::{Config, bind_interrupts, interrupt, peripherals};
 use embassy_time::{Duration, Ticker, Timer};
-use accelerometer::vector::F32x3;
 use lis2de12::{Lis2de12Async, SlaveAddr};
 
 #[path = "../sd_logger.rs"]
@@ -84,7 +84,9 @@ async fn main(_spawner: Spawner) {
     defmt::info!("[Step 1/5] Initializing clocks (HSI -> PLL1 @ 64/96MHz)...");
 
     // 2. User Interface (LEDs & Buttons on MB1801 mezzanine board)
-    defmt::info!("[Step 2/5] Configuring GPIOs (LD1 Blue=PD8, LD2 Green=PC4, LD3 Red=PB8, B1=PC13)...");
+    defmt::info!(
+        "[Step 2/5] Configuring GPIOs (LD1 Blue=PD8, LD2 Green=PC4, LD3 Red=PB8, B1=PC13)..."
+    );
     let mut led_blue = Output::new(p.PD8, Level::Low, Speed::Low); // LD1
     let mut led_green = Output::new(p.PC4, Level::Low, Speed::Low); // LD2
     let mut led_red = Output::new(p.PB8, Level::Low, Speed::Low); // LD3
@@ -101,7 +103,13 @@ async fn main(_spawner: Spawner) {
     i2c_cfg.sda_pullup = true;
     i2c_cfg.scl_pullup = true;
     let mut i2c = I2c::new(
-        p.I2C1, p.PB2, p.PB1, p.GPDMA1_CH0, p.GPDMA1_CH1, Irqs, i2c_cfg,
+        p.I2C1,
+        p.PB2,
+        p.PB1,
+        p.GPDMA1_CH0,
+        p.GPDMA1_CH1,
+        Irqs,
+        i2c_cfg,
     );
 
     // Check LIS2DE12 WHO_AM_I (probes standard 0x18 and alternate 0x19)
@@ -186,7 +194,9 @@ async fn main(_spawner: Spawner) {
 
     defmt::info!("----------------------------------------------------------");
     defmt::info!("System initialization complete! Ready for data ingestion.");
-    defmt::info!("Storage mode: Real-time RTT JSONL terminal streaming + RAM buffer (MicroSD optional).");
+    defmt::info!(
+        "Storage mode: Real-time RTT JSONL terminal streaming + RAM buffer (MicroSD optional)."
+    );
     defmt::info!(">> Press User Button B1 (PC13) to record a 128-sample gesture burst.");
     defmt::info!("----------------------------------------------------------");
 
@@ -251,7 +261,10 @@ async fn main(_spawner: Spawner) {
                 if let Ok(json_str) = core::str::from_utf8(&json_buffer[..len]) {
                     defmt::info!("{}", json_str);
                 }
-                defmt::info!(">> Sample #{} recorded successfully! Ready for SD card persistence.", sample_seq);
+                defmt::info!(
+                    ">> Sample #{} recorded successfully! Ready for SD card persistence.",
+                    sample_seq
+                );
             }
             Err(_) => {
                 defmt::error!("!! Buffer overflow while formatting JSONL record");

@@ -36,6 +36,10 @@ pub struct DatasetSample {
     pub label: String,
     pub class_idx: usize,
     pub raw_waveform: Vec<f32>,
+    /// Per-axis motion path retained alongside the scalar `raw_waveform`, so the
+    /// 3D gesture view can replay a capture. Empty when the source was not
+    /// 3-axis; the DSP pipeline never reads this.
+    pub trajectory: Vec<[f32; 3]>,
     /// Per-frame Mel-energy feature sequence (the real temporal axis), each frame
     /// length `dsp.num_mel_bins`. Every sample has exactly `num_frames_for_config(&dsp)` frames.
     /// This is the single source of truth; pooled/flattened views are derived on demand.
@@ -445,6 +449,16 @@ impl StudioState {
 
     /// Loads a multi-class synthetic IMU gesture dataset for instant interactive experimentation
     /// Loads a multi-class 3-axis IMU gesture dataset for instant end-to-end showcase
+    /// Collapses a 3-axis path to the scalar channel the DSP pipeline consumes,
+    /// matching `DatasetRecord::scalar_channel` so demo, imported and live
+    /// samples all reach the pipeline in the same form.
+    pub fn scalar_magnitude(trajectory: &[[f32; 3]]) -> Vec<f32> {
+        trajectory
+            .iter()
+            .map(|[x, y, z]| (x * x + y * y + z * z).sqrt())
+            .collect()
+    }
+
     pub fn load_demo_dataset(&mut self) {
         self.samples.clear();
         self.next_sample_id = 1;
@@ -454,7 +468,7 @@ impl StudioState {
 
         for (class_idx, class_name) in self.classes.iter().enumerate() {
             for s in 0..num_samples_per_class {
-                let mut waveform = Vec::with_capacity(signal_length * 3);
+                let mut trajectory = Vec::with_capacity(signal_length);
                 let phase_shift = (s as f32) * 0.15;
                 let noise_level = 0.05;
 
@@ -484,9 +498,7 @@ impl StudioState {
                         ), // shake: high-frequency 3D oscillation
                         _ => (0.0, 0.0, 1.0),
                     };
-                    waveform.push(ax);
-                    waveform.push(ay);
-                    waveform.push(az);
+                    trajectory.push([ax, ay, az]);
                 }
 
                 let id = self.next_sample_id;
@@ -495,7 +507,8 @@ impl StudioState {
                     id,
                     label: class_name.clone(),
                     class_idx,
-                    raw_waveform: waveform,
+                    raw_waveform: Self::scalar_magnitude(&trajectory),
+                    trajectory,
                     frames: Vec::new(),
                     quantized_frames: Vec::new(),
                 });
@@ -1944,6 +1957,20 @@ impl StudioState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn demo_samples_keep_xyz_path_and_a_matching_scalar_waveform() {
+        let mut state = StudioState::default();
+        state.load_demo_dataset();
+
+        let sample = state.samples.first().expect("demo dataset is non-empty");
+        assert!(!sample.trajectory.is_empty());
+        // The DSP pipeline sees one scalar per timestep, not interleaved axes.
+        assert_eq!(sample.raw_waveform.len(), sample.trajectory.len());
+
+        let [x, y, z] = sample.trajectory[0];
+        assert!((sample.raw_waveform[0] - (x * x + y * y + z * z).sqrt()).abs() < f32::EPSILON);
+    }
 
     fn set_arch(state: &mut StudioState, arch: ModelArchitecture) {
         state.model_config.arch = arch;

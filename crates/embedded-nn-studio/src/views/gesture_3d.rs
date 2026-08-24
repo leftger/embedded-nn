@@ -1,7 +1,12 @@
 #![allow(dead_code)]
 
+use crate::state::StudioState;
 use eframe::egui::{self, Color32, Pos2, Stroke, Vec2};
 use std::f32::consts::PI;
+
+/// Fraction of the trajectory revealed per frame while playing back, roughly a
+/// four-second sweep at 60 FPS regardless of how long the capture is.
+const PLAYBACK_STEP: f32 = 1.0 / 240.0;
 
 pub struct Gesture3DView {
     pub azimuth_deg: f32,
@@ -10,6 +15,7 @@ pub struct Gesture3DView {
     pub auto_rotate: bool,
     pub playback_progress: f32,
     pub is_playing: bool,
+    pub selected_sample_idx: usize,
 }
 
 impl Default for Gesture3DView {
@@ -21,6 +27,7 @@ impl Default for Gesture3DView {
             auto_rotate: false,
             playback_progress: 1.0,
             is_playing: false,
+            selected_sample_idx: 0,
         }
     }
 }
@@ -30,12 +37,70 @@ impl Gesture3DView {
         Self::default()
     }
 
+    /// Trajectory to draw plus a label describing where it came from. A live
+    /// stream wins over the dataset; a scalar-only capture falls back to a
+    /// synthetic helix so the sample is at least visible.
+    pub fn resolve_source(
+        &self,
+        state: &StudioState,
+        live: Option<&[[f32; 3]]>,
+    ) -> (Vec<[f32; 3]>, String) {
+        if let Some(points) = live
+            && !points.is_empty()
+        {
+            return (points.to_vec(), "Live device stream".into());
+        }
+
+        let Some(sample) = state.samples.get(self.selected_sample_idx) else {
+            return (Vec::new(), "No samples".into());
+        };
+        let tag = format!("Sample #{:03} [{}]", sample.id, sample.label);
+
+        if !sample.trajectory.is_empty() {
+            return (sample.trajectory.clone(), tag);
+        }
+        let synthetic = sample
+            .raw_waveform
+            .iter()
+            .enumerate()
+            .map(|(i, &m)| {
+                let phase = i as f32 * 0.1;
+                [m * phase.cos(), m * phase.sin(), m]
+            })
+            .collect();
+        (synthetic, format!("{tag} — scalar only, synthetic path"))
+    }
+
     /// Renders the 3D gesture trajectory viewport.
-    pub fn ui(&mut self, ui: &mut egui::Ui, raw_samples: &[[f32; 3]]) {
+    pub fn ui(&mut self, ui: &mut egui::Ui, state: &StudioState, live: Option<&[[f32; 3]]>) {
+        let is_live = live.is_some_and(|points| !points.is_empty());
+        if !state.samples.is_empty() {
+            self.selected_sample_idx = self.selected_sample_idx.min(state.samples.len() - 1);
+        }
+        let (raw_samples, source_label) = self.resolve_source(state, live);
+        let raw_samples = raw_samples.as_slice();
+
+        // A live stream is always drawn whole; scrubbing only makes sense for a
+        // finished capture.
+        if is_live {
+            self.is_playing = false;
+            self.playback_progress = 1.0;
+        } else if self.is_playing {
+            self.playback_progress += PLAYBACK_STEP;
+            if self.playback_progress >= 1.0 {
+                self.playback_progress = 1.0;
+                self.is_playing = false;
+            }
+            ui.ctx().request_repaint();
+        }
+
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 ui.heading("🌐 3D Gesture Trajectory Visualizer");
-                ui.label(format!("• {} trajectory points", raw_samples.len()));
+                ui.label(format!(
+                    "• {source_label} • {} trajectory points",
+                    raw_samples.len()
+                ));
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("↺ Reset View").clicked() {
@@ -44,6 +109,49 @@ impl Gesture3DView {
                         self.zoom = 1.0;
                     }
                     ui.toggle_value(&mut self.auto_rotate, "⟳ Auto-Rotate");
+                });
+            });
+
+            ui.add_space(4.0);
+
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(!is_live && !state.samples.is_empty(), |ui| {
+                    ui.label("Captured Sample:");
+                    egui::ComboBox::from_id_salt("gesture3d_sample_combo")
+                        .selected_text(match state.samples.get(self.selected_sample_idx) {
+                            Some(s) => format!("#{:03} - {}", s.id, s.label),
+                            None => "None".into(),
+                        })
+                        .show_ui(ui, |ui| {
+                            for (idx, s) in state.samples.iter().enumerate().take(50) {
+                                let has_xyz = if s.trajectory.is_empty() { "" } else { " ▪" };
+                                ui.selectable_value(
+                                    &mut self.selected_sample_idx,
+                                    idx,
+                                    format!("#{:03} - {}{}", s.id, s.label, has_xyz),
+                                );
+                            }
+                        });
+
+                    ui.separator();
+
+                    let play_label = if self.is_playing {
+                        "⏸ Pause"
+                    } else {
+                        "▶ Replay"
+                    };
+                    if ui.button(play_label).clicked() {
+                        self.is_playing = !self.is_playing;
+                        // Restarting from a finished sweep should replay it.
+                        if self.is_playing && self.playback_progress >= 1.0 {
+                            self.playback_progress = 0.0;
+                        }
+                    }
+                    ui.add(
+                        egui::Slider::new(&mut self.playback_progress, 0.0..=1.0)
+                            .show_value(false)
+                            .text("playback"),
+                    );
                 });
             });
 
@@ -183,5 +291,55 @@ impl Gesture3DView {
                 );
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_stream_outranks_the_selected_capture() {
+        let mut state = StudioState::default();
+        state.load_demo_dataset();
+        let view = Gesture3DView::new();
+        let live = [[1.0, 2.0, 3.0]];
+
+        let (points, label) = view.resolve_source(&state, Some(&live));
+        assert_eq!(points, vec![[1.0, 2.0, 3.0]]);
+        assert_eq!(label, "Live device stream");
+
+        // An empty live buffer is not a stream; fall through to the capture.
+        let (points, label) = view.resolve_source(&state, Some(&[]));
+        assert_eq!(points, state.samples[0].trajectory);
+        assert!(label.starts_with("Sample #001"));
+    }
+
+    #[test]
+    fn scalar_only_capture_is_flagged_as_a_synthetic_path() {
+        let mut state = StudioState::default();
+        state.load_demo_dataset();
+        state.samples[0].trajectory.clear();
+
+        let view = Gesture3DView::new();
+        let (points, label) = view.resolve_source(&state, None);
+
+        assert_eq!(points.len(), state.samples[0].raw_waveform.len());
+        assert!(label.contains("synthetic"), "got {label}");
+    }
+
+    #[test]
+    fn empty_dataset_or_stale_selection_yields_no_trajectory() {
+        let mut state = StudioState::default();
+        state.samples.clear();
+        let mut view = Gesture3DView::new();
+
+        let (points, label) = view.resolve_source(&state, None);
+        assert!(points.is_empty());
+        assert_eq!(label, "No samples");
+
+        // A selection left over from a larger dataset must not panic.
+        view.selected_sample_idx = usize::MAX;
+        assert!(view.resolve_source(&state, None).0.is_empty());
     }
 }

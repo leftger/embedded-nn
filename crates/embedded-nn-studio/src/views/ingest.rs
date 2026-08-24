@@ -14,6 +14,31 @@ fn file_name(path: &Path) -> String {
 /// Label assigned to imported records that carry no label of their own.
 const UNLABELED_IMPORT: &str = "unlabeled_import";
 
+/// Points retained per channel in the live oscilloscope ring buffer.
+const SCOPE_HISTORY: usize = 400;
+
+/// Names the first three channels X/Y/Z, matching the 3-DOF accelerometer the
+/// HIL agent streams; anything beyond that is shown by index.
+fn channel_label(channel: usize) -> String {
+    match channel {
+        0 => "X".into(),
+        1 => "Y".into(),
+        2 => "Z".into(),
+        other => format!("ch{other}"),
+    }
+}
+
+/// Per-channel trace colour, cycling for channel counts beyond 3.
+fn channel_color(channel: usize) -> egui::Color32 {
+    const PALETTE: [egui::Color32; 4] = [
+        egui::Color32::from_rgb(255, 105, 97),
+        egui::Color32::from_rgb(60, 210, 130),
+        egui::Color32::from_rgb(90, 165, 255),
+        egui::Color32::from_rgb(230, 190, 90),
+    ];
+    PALETTE[channel % PALETTE.len()]
+}
+
 #[derive(Default)]
 pub struct IngestView {
     pub selected_port: String,
@@ -21,7 +46,9 @@ pub struct IngestView {
     pub current_label: String,
     pub new_class_name: String,
     pub is_recording: bool,
-    pub live_sensor_history: Vec<f32>,
+    /// One ring buffer per sensor channel, de-interleaved from `SensorFrame`.
+    /// The scope draws every channel; recordings collapse them to a scalar.
+    pub live_channels: Vec<Vec<f32>>,
     pub live_time_counter: f32,
     pub import_status: String,
     pub available_agents: Vec<String>,
@@ -36,11 +63,95 @@ impl IngestView {
             current_label: "wave_left".into(),
             new_class_name: String::new(),
             is_recording: false,
-            live_sensor_history: (0..100).map(|i| ((i as f32) * 0.1).sin() * 0.7).collect(),
+            live_channels: vec![(0..100).map(|i| ((i as f32) * 0.1).sin() * 0.7).collect()],
             live_time_counter: 0.0,
             import_status: String::new(),
             available_agents: Vec::new(),
             link_status: "Disconnected".into(),
+        }
+    }
+
+    /// Appends one de-interleaved `SensorFrame` payload, reshaping the buffers
+    /// if the device changed its channel count.
+    fn push_sensor_samples(&mut self, samples: &[f32], channel_count: usize) {
+        let stride = channel_count.max(1);
+        if self.live_channels.len() != stride {
+            self.live_channels = vec![Vec::new(); stride];
+        }
+        for step in samples.chunks_exact(stride) {
+            for (channel, value) in self.live_channels.iter_mut().zip(step) {
+                channel.push(*value);
+                if channel.len() > SCOPE_HISTORY {
+                    let extra = channel.len() - SCOPE_HISTORY;
+                    channel.drain(..extra);
+                }
+            }
+        }
+    }
+
+    /// Drains the device into the live channel buffers, or advances the
+    /// simulated source when no device is handshaked. The app shell calls this
+    /// every frame rather than `show` doing it, so the stream keeps flowing
+    /// while a tab other than Ingest is on screen.
+    pub fn poll_device(&mut self, device_link: &Option<DeviceLink>) {
+        let Some(link) = device_link.as_ref() else {
+            self.advance_simulated_source();
+            return;
+        };
+
+        if link.is_handshaked() {
+            self.link_status = format!("Ready {}", link.device_id());
+        }
+        if let Some(OwnedMsg::SensorFrame {
+            timestamp_ms,
+            channel_count,
+            values,
+        }) = link.take_sensor()
+        {
+            let mut samples = vec![0.0f32; values.len() / 4];
+            if let Ok(n) = decode_f32_le(&values, &mut samples) {
+                // `values` is channel-interleaved (x,y,z,x,y,z,...).
+                self.push_sensor_samples(&samples[..n], usize::from(channel_count));
+                self.link_status = format!("t={timestamp_ms} ms ch={channel_count} samples={n}");
+            }
+        }
+        if let Some(error) = link.take_error() {
+            self.link_status = error;
+        }
+        if !link.is_handshaked() {
+            self.advance_simulated_source();
+        }
+    }
+
+    fn advance_simulated_source(&mut self) {
+        self.live_time_counter += 0.05;
+        let t = self.live_time_counter;
+        let new_sample = (t * 2.5).sin() * 0.7 + (t * 7.0).cos() * 0.2;
+        self.push_sensor_samples(&[new_sample], 1);
+    }
+
+    /// Re-interleaves the live buffers into XYZ points for the 3D gesture
+    /// view. `None` unless the source is exactly three channels, since a
+    /// scalar or 6-DOF stream has no meaningful 3D trajectory.
+    pub fn live_trajectory(&self) -> Option<Vec<[f32; 3]>> {
+        let [x, y, z] = self.live_channels.as_slice() else {
+            return None;
+        };
+        let len = x.len().min(y.len()).min(z.len());
+        Some((0..len).map(|i| [x[i], y[i], z[i]]).collect())
+    }
+
+    /// Collapses the live channels into the scalar waveform the Mel DSP
+    /// pipeline consumes, using the same magnitude rule as
+    /// `DatasetRecord::scalar_channel` so live captures and file imports agree.
+    fn scalar_history(&self) -> Vec<f32> {
+        let len = self.live_channels.iter().map(Vec::len).min().unwrap_or(0);
+        match self.live_channels.as_slice() {
+            [] => Vec::new(),
+            [single] => single[..len].to_vec(),
+            multi => (0..len)
+                .map(|i| multi.iter().map(|c| c[i] * c[i]).sum::<f32>().sqrt())
+                .collect(),
         }
     }
 
@@ -62,6 +173,7 @@ impl IngestView {
                                 label,
                                 class_idx,
                                 raw_waveform: record.scalar_channel(),
+                                trajectory: record.xyz_trajectory(),
                                 frames: Vec::new(),
                                 quantized_frames: Vec::new(),
                             });
@@ -153,33 +265,10 @@ impl IngestView {
                     *device_link = None;
                     self.link_status = "Disconnected".into();
                 }
-                if let Some(link) = device_link.as_ref() {
-                    if link.is_handshaked() {
-                        self.link_status = format!("Ready {}", link.device_id());
-                    }
-                    if ui.button("Ping").clicked() {
-                        link.ping();
-                    }
-                    if let Some(OwnedMsg::SensorFrame {
-                        timestamp_ms,
-                        channel_count,
-                        values,
-                    }) = link.take_sensor()
-                    {
-                        let mut samples = vec![0.0f32; values.len() / 4];
-                        if let Ok(n) = decode_f32_le(&values, &mut samples) {
-                            self.live_sensor_history.extend(&samples[..n]);
-                            if self.live_sensor_history.len() > 400 {
-                                let extra = self.live_sensor_history.len() - 400;
-                                self.live_sensor_history.drain(..extra);
-                            }
-                            self.link_status =
-                                format!("t={timestamp_ms} ms ch={channel_count} samples={n}");
-                        }
-                    }
-                    if let Some(error) = link.take_error() {
-                        self.link_status = error;
-                    }
+                if let Some(link) = device_link.as_ref()
+                    && ui.button("Ping").clicked()
+                {
+                    link.ping();
                 }
                 ui.label(&self.link_status);
 
@@ -227,7 +316,8 @@ impl IngestView {
                             id,
                             label: self.current_label.clone(),
                             class_idx,
-                            raw_waveform: self.live_sensor_history.clone(),
+                            raw_waveform: self.scalar_history(),
+                            trajectory: self.live_trajectory().unwrap_or_default(),
                             frames: Vec::new(),
                             quantized_frames: Vec::new(),
                         });
@@ -254,26 +344,15 @@ impl IngestView {
 
         ui.add_space(8.0);
 
-        // Advance the pseudo-generated waveform only while there is no
-        // handshaked real device; otherwise real `SensorFrame` samples
-        // (appended above) are the sole source for the oscilloscope.
-        let using_real_device = device_link
-            .as_ref()
-            .is_some_and(|link| link.is_handshaked());
-        if !using_real_device {
-            self.live_time_counter += 0.05;
-            let t = self.live_time_counter;
-            let new_sample = (t * 2.5).sin() * 0.7 + (t * 7.0).cos() * 0.2;
-            self.live_sensor_history.remove(0);
-            self.live_sensor_history.push(new_sample);
-        }
-
         // Live Oscilloscope & Class Balance Layout
         ui.columns(2, |cols| {
             // Left Column: Live Oscilloscope
             cols[0].group(|ui| {
                 ui.horizontal(|ui| {
-                    ui.label("📈 Live Oscilloscope Stream (Active Sensor Channel)");
+                    ui.label("📈 Live Oscilloscope Stream");
+                    for channel in 0..self.live_channels.len() {
+                        ui.colored_label(channel_color(channel), channel_label(channel));
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if self.is_recording {
                             ui.colored_label(egui::Color32::from_rgb(255, 80, 80), "● RECORDING");
@@ -303,25 +382,27 @@ impl IngestView {
                     egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(30, 40, 55)),
                 );
 
-                let n = self.live_sensor_history.len();
-                if n > 1 {
+                let scale_y = 50.0;
+                for (channel, history) in self.live_channels.iter().enumerate() {
+                    let n = history.len();
+                    if n < 2 {
+                        continue;
+                    }
                     let dx = rect.width() / (n - 1) as f32;
-                    let scale_y = 50.0;
+                    let stroke = egui::Stroke::new(
+                        if self.is_recording { 2.0_f32 } else { 1.5_f32 },
+                        channel_color(channel),
+                    );
                     for i in 0..n - 1 {
                         let p1 = egui::pos2(
                             rect.left() + (i as f32) * dx,
-                            mid_y - self.live_sensor_history[i] * scale_y,
+                            mid_y - history[i] * scale_y,
                         );
                         let p2 = egui::pos2(
                             rect.left() + ((i + 1) as f32) * dx,
-                            mid_y - self.live_sensor_history[i + 1] * scale_y,
+                            mid_y - history[i + 1] * scale_y,
                         );
-                        let stroke_color = if self.is_recording {
-                            egui::Color32::from_rgb(255, 90, 90)
-                        } else {
-                            egui::Color32::from_rgb(60, 210, 130)
-                        };
-                        painter.line_segment([p1, p2], egui::Stroke::new(2.0_f32, stroke_color));
+                        painter.line_segment([p1, p2], stroke);
                     }
                 }
             });
@@ -492,6 +573,14 @@ mod tests {
         assert_eq!(imported[0].raw_waveform, vec![5.0, 2.0]);
         assert_eq!(imported[1].label, "recoil_anomaly");
         assert_eq!(imported[1].raw_waveform, vec![0.5, -0.5]);
+
+        // The 3-axis record keeps its motion path for the 3D view; the scalar
+        // one has none to keep.
+        assert_eq!(
+            imported[0].trajectory,
+            vec![[3.0, 4.0, 0.0], [0.0, 0.0, 2.0]]
+        );
+        assert!(imported[1].trajectory.is_empty());
         assert!(state.classes.contains(&UNLABELED_IMPORT.to_string()));
         assert_eq!(state.classes[imported[1].class_idx], "recoil_anomaly");
 
@@ -505,6 +594,24 @@ mod tests {
         assert_eq!(state.bias_fc2.len(), state.classes.len());
 
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn live_trajectory_rebuilds_xyz_points_only_for_three_channel_streams() {
+        let mut view = IngestView::new();
+
+        // The default simulated source is scalar: no 3D trajectory.
+        assert!(view.live_trajectory().is_none());
+
+        view.push_sensor_samples(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 3);
+        assert_eq!(
+            view.live_trajectory().unwrap(),
+            vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+        );
+
+        // A channel-count change reshapes the buffers and drops the trajectory.
+        view.push_sensor_samples(&[0.25], 1);
+        assert!(view.live_trajectory().is_none());
     }
 
     #[test]

@@ -14,8 +14,9 @@ use embassy_executor::Spawner;
 use embassy_stm32::dma;
 use embassy_stm32::i2c::{self, Config as I2cConfig, I2c};
 use embassy_stm32::rcc::*;
+use embassy_stm32::time::Hertz;
 use embassy_stm32::usb::{self, Driver};
-use embassy_stm32::{bind_interrupts, peripherals, Config};
+use embassy_stm32::{Config, bind_interrupts, peripherals};
 use embassy_time::{Duration, Instant, with_timeout};
 use embassy_usb::driver::{Endpoint, EndpointIn, EndpointOut};
 use embassy_usb::msos::{
@@ -23,13 +24,15 @@ use embassy_usb::msos::{
 };
 use embassy_usb::{Builder, UsbDevice};
 use embedded_nn_live::{Decoder, Msg, NackCode};
-use lis2de12::{Lis2de12Async, SlaveAddr};
+use lis2de12::{
+    FIFO_CAPACITY, FifoConfig, FifoFrame, FifoMode, Lis2de12Async, Lis2de12Config, Odr, SlaveAddr,
+};
 use static_cell::StaticCell;
 
-#[path = "../model.rs"]
-mod model;
 #[path = "../hil_usb.rs"]
 mod hil_usb;
+#[path = "../model.rs"]
+mod model;
 #[path = "../on_device_dsp.rs"]
 mod on_device_dsp;
 
@@ -49,6 +52,29 @@ const LIS2DE12_ADDR_ALT: u8 = 0x19;
 /// request pending). Bounds the USB-HS bulk read wait, not the sensor's own
 /// ODR, so it also caps how stale a burst of queued host requests can get.
 const SENSOR_PERIOD: Duration = Duration::from_hz(50);
+
+/// LIS2DE12 sensitivity at the configured ±2 g range.
+const G_PER_LSB: f32 = 0.0156;
+
+/// Average all FIFO frames into one XYZ sample in g.
+///
+/// The LIS2DE12 stores its signed 8-bit axis values in the high byte of each
+/// little-endian output-register pair.
+fn average_fifo_frames(frames: &[FifoFrame]) -> [f32; 3] {
+    let mut sums = [0i32; 3];
+    for frame in frames {
+        sums[0] += i32::from(frame[1] as i8);
+        sums[1] += i32::from(frame[3] as i8);
+        sums[2] += i32::from(frame[5] as i8);
+    }
+
+    let scale = G_PER_LSB / frames.len() as f32;
+    [
+        sums[0] as f32 * scale,
+        sums[1] as f32 * scale,
+        sums[2] as f32 * scale,
+    ]
+}
 
 bind_interrupts!(struct Irqs {
     USB_OTG_HS => usb::InterruptHandler<peripherals::USB_OTG_HS>;
@@ -113,10 +139,17 @@ async fn main(spawner: Spawner) {
     // always DMA-backed internally (`new_no_dma` leaves the DMA channels as
     // `None`, which panics the first time an async read/write is issued).
     let mut i2c_cfg = I2cConfig::default();
+    i2c_cfg.frequency = Hertz(400_000);
     i2c_cfg.sda_pullup = true;
     i2c_cfg.scl_pullup = true;
     let mut i2c = I2c::new(
-        p.I2C1, p.PB2, p.PB1, p.GPDMA1_CH0, p.GPDMA1_CH1, Irqs, i2c_cfg,
+        p.I2C1,
+        p.PB2,
+        p.PB1,
+        p.GPDMA1_CH0,
+        p.GPDMA1_CH1,
+        Irqs,
+        i2c_cfg,
     );
 
     let mut who = [0u8; 1];
@@ -138,11 +171,23 @@ async fn main(spawner: Spawner) {
         None
     };
 
+    let sensor_config = Lis2de12Config {
+        odr: Odr::FourHundredHz,
+        fifo: FifoConfig::enabled(FifoMode::Stream),
+        ..Default::default()
+    };
     let mut accel = match detected_addr {
-        Some(addr) => match Lis2de12Async::new_i2c(i2c, addr).await {
-            Ok(dev) => {
-                defmt::info!("hil_agent: LIS2DE12 detected, sensor streaming enabled");
-                Some(dev)
+        Some(addr) => match Lis2de12Async::new_i2c_with_config(i2c, addr, sensor_config).await {
+            Ok(mut dev) => {
+                if dev.reset_fifo().await.is_ok() {
+                    defmt::info!("hil_agent: LIS2DE12 detected, 400 Hz FIFO averaging enabled");
+                    Some(dev)
+                } else {
+                    defmt::warn!(
+                        "hil_agent: LIS2DE12 FIFO reset failed, sensor streaming disabled"
+                    );
+                    None
+                }
             }
             Err(_) => {
                 defmt::warn!("hil_agent: LIS2DE12 init failed, sensor streaming disabled");
@@ -214,10 +259,16 @@ async fn main(spawner: Spawner) {
     let mut encode_buf = [0u8; DEC_CAP + embedded_nn_live::FRAME_OVERHEAD];
     let mut logits = [0u8; 64];
     let mut input = [0i8; 64];
+    let mut fifo_frames = [[0u8; 6]; FIFO_CAPACITY as usize];
 
     loop {
         rx.wait_enabled().await;
         defmt::info!("hil_agent: host connected");
+        // Discard samples accumulated while no host was connected, so the
+        // first report starts a fresh averaging window.
+        if let Some(dev) = accel.as_mut() {
+            let _ = dev.reset_fifo().await;
+        }
 
         loop {
             let n = match with_timeout(SENSOR_PERIOD, rx.read(&mut packet)).await {
@@ -227,20 +278,20 @@ async fn main(spawner: Spawner) {
                     break;
                 }
                 Err(_timeout) => {
-                    if let Some(dev) = accel.as_mut() {
-                        if let Ok(g) = dev.read_g().await {
-                            let mut values = [0u8; 12];
-                            if embedded_nn_live::encode_f32_le(&[g.x, g.y, g.z], &mut values)
-                                .is_ok()
-                            {
-                                let frame = Msg::SensorFrame {
-                                    timestamp_ms: Instant::now().as_millis() as u32,
-                                    channel_count: 3,
-                                    values: &values,
-                                };
-                                if let Ok(len) = frame.encode(&mut encode_buf) {
-                                    let _ = tx.write_transfer(&encode_buf[..len], true).await;
-                                }
+                    if let Some(dev) = accel.as_mut()
+                        && let Ok(frame_count) = dev.read_fifo_frames(&mut fifo_frames).await
+                        && frame_count > 0
+                    {
+                        let g = average_fifo_frames(&fifo_frames[..frame_count]);
+                        let mut values = [0u8; 12];
+                        if embedded_nn_live::encode_f32_le(&g, &mut values).is_ok() {
+                            let frame = Msg::SensorFrame {
+                                timestamp_ms: Instant::now().as_millis() as u32,
+                                channel_count: 3,
+                                values: &values,
+                            };
+                            if let Ok(len) = frame.encode(&mut encode_buf) {
+                                let _ = tx.write_transfer(&encode_buf[..len], true).await;
                             }
                         }
                     }
@@ -281,7 +332,8 @@ async fn main(spawner: Spawner) {
                                         seq,
                                         code: NackCode::BadInputLen as u16,
                                     })
-                                } else if raw.len() > input.len() || model::SineFc::OUTPUT_DIM > logits.len()
+                                } else if raw.len() > input.len()
+                                    || model::SineFc::OUTPUT_DIM > logits.len()
                                 {
                                     Some(Msg::Nack {
                                         seq,

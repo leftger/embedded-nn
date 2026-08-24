@@ -1034,9 +1034,9 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "lis2de12"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "648028a1a5597f15fe4723c30445f9d277eb870e02c6aa07c1349d15db9e4645"
+checksum = "04efc88b5d5575a4c1834ef770c4063adc619920933fecc28ff49685404870bc"
 dependencies = [
  "accelerometer",
  "device-driver",
