@@ -14,28 +14,42 @@ use defmt_rtt as _;
 use panic_probe as _;
 
 use embassy_executor::Spawner;
+use embassy_stm32::dma;
 use embassy_stm32::exti::{self, ExtiInput};
 use embassy_stm32::gpio::{Level, Output, Pull, Speed};
-use embassy_stm32::i2c::{Config as I2cConfig, I2c};
+use embassy_stm32::i2c::{self, Config as I2cConfig, I2c};
 use embassy_stm32::rcc::*;
 use embassy_stm32::spi::{BitOrder, Config as SpiConfig, Mode as SpiMode, Phase, Polarity, Spi};
 use embassy_stm32::time::Hertz;
-use embassy_stm32::{bind_interrupts, interrupt, Config};
+use embassy_stm32::{bind_interrupts, interrupt, peripherals, Config};
 use embassy_time::{Duration, Ticker, Timer};
+use accelerometer::vector::F32x3;
+use lis2de12::{Lis2de12Async, SlaveAddr};
 
-#[path = "../lis2de12.rs"]
-mod lis2de12;
 #[path = "../sd_logger.rs"]
 mod sd_logger;
 #[path = "../w25q32.rs"]
 mod w25q32;
 
-use lis2de12::{AccelG, FullScale, Lis2de12, Odr};
 use sd_logger::{AccelSample, DatasetBurst};
 use w25q32::W25q32;
 
+/// WHO_AM_I register address and expected value, used only to probe which of
+/// the two possible 7-bit addresses the LIS2DE12 responds on before handing
+/// the bus to `Lis2de12Async::new_i2c`. `SlaveAddr::addr()` is private to the
+/// `lis2de12` crate, so the raw addresses are duplicated here (datasheet
+/// Table 15, 7-bit form).
+const WHO_AM_I_REG: u8 = 0x0F;
+const WHO_AM_I_VAL: u8 = 0x33;
+const LIS2DE12_ADDR_DEFAULT: u8 = 0x18;
+const LIS2DE12_ADDR_ALT: u8 = 0x19;
+
 bind_interrupts!(struct Irqs {
     EXTI13 => exti::InterruptHandler<interrupt::typelevel::EXTI13>;
+    I2C1_EV => i2c::EventInterruptHandler<peripherals::I2C1>;
+    I2C1_ER => i2c::ErrorInterruptHandler<peripherals::I2C1>;
+    GPDMA1_CHANNEL0 => dma::InterruptHandler<peripherals::GPDMA1_CH0>;
+    GPDMA1_CHANNEL1 => dma::InterruptHandler<peripherals::GPDMA1_CH1>;
 });
 
 #[embassy_executor::main]
@@ -80,34 +94,58 @@ async fn main(_spawner: Spawner) {
 
     // 4. Initialize I2C1 for LIS2DE12 on Arduino Header D14/D15 (PB1 SDA, PB2 SCL)
     defmt::info!("[Step 3/5] Initializing I2C1 on PB2 (SCL) / PB1 (SDA) with internal pull-ups...");
+    // WBA65's I2C peripheral is the "v2" variant, whose async transfers are
+    // always DMA-backed internally (`new_no_dma` leaves the DMA channels as
+    // `None`, which panics the first time an async read/write is issued).
     let mut i2c_cfg = I2cConfig::default();
     i2c_cfg.sda_pullup = true;
     i2c_cfg.scl_pullup = true;
-    let i2c = I2c::new_blocking(p.I2C1, p.PB2, p.PB1, i2c_cfg);
-    let mut accel = Lis2de12::new(i2c);
+    let mut i2c = I2c::new(
+        p.I2C1, p.PB2, p.PB1, p.GPDMA1_CH0, p.GPDMA1_CH1, Irqs, i2c_cfg,
+    );
 
     // Check LIS2DE12 WHO_AM_I (probes standard 0x18 and alternate 0x19)
     defmt::info!("[Step 4/5] Probing LIS2DE12 accelerometer on I2C bus...");
-    let accel_ok = if accel.auto_detect() {
-        defmt::info!(
-            " -> LIS2DE12 detected at I2C address 0x{:02x} (WHO_AM_I = 0x33)",
-            accel.address()
-        );
-
-        // Configure LIS2DE12: 100 Hz ODR, +/- 2g range, Block Data Update enabled
-        if let Err(_) = accel.init(Odr::Hz100, FullScale::G2) {
-            defmt::error!(" -> Failed to initialize LIS2DE12 CTRL registers");
-            led_red.set_high();
-            false
-        } else {
-            defmt::info!(" -> LIS2DE12 configured: 100 Hz ODR, +/- 2g scale, BDU enabled");
-            led_green.set_high();
-            true
-        }
+    let mut who = [0u8; 1];
+    let detected_addr = if i2c
+        .write_read(LIS2DE12_ADDR_DEFAULT, &[WHO_AM_I_REG], &mut who)
+        .await
+        .is_ok()
+        && who[0] == WHO_AM_I_VAL
+    {
+        Some(SlaveAddr::Default)
+    } else if i2c
+        .write_read(LIS2DE12_ADDR_ALT, &[WHO_AM_I_REG], &mut who)
+        .await
+        .is_ok()
+        && who[0] == WHO_AM_I_VAL
+    {
+        Some(SlaveAddr::Alternative)
     } else {
-        defmt::error!(" -> LIS2DE12 not detected at 0x18 or 0x19 on PB1 (SDA) / PB2 (SCL)");
-        led_red.set_high();
-        false
+        None
+    };
+
+    // Configure LIS2DE12: 100 Hz ODR, +/- 2g range, Block Data Update enabled
+    // (`Lis2de12Config::default()` matches all three).
+    let mut accel = match detected_addr {
+        Some(addr) => match Lis2de12Async::new_i2c(i2c, addr).await {
+            Ok(dev) => {
+                defmt::info!(" -> LIS2DE12 detected (WHO_AM_I = 0x33)");
+                defmt::info!(" -> LIS2DE12 configured: 100 Hz ODR, +/- 2g scale, BDU enabled");
+                led_green.set_high();
+                Some(dev)
+            }
+            Err(_) => {
+                defmt::error!(" -> Failed to initialize LIS2DE12 CTRL registers");
+                led_red.set_high();
+                None
+            }
+        },
+        None => {
+            defmt::error!(" -> LIS2DE12 not detected at 0x18 or 0x19 on PB1 (SDA) / PB2 (SCL)");
+            led_red.set_high();
+            None
+        }
     };
 
     // 5. Initialize SPI2 for MicroSD (PA10 CS) & W25Q32 NOR Flash (PA3 CS)
@@ -167,14 +205,14 @@ async fn main(_spawner: Spawner) {
             sample_seq
         );
 
-        let mut latest_g = AccelG { x: 0.0, y: 0.0, z: 0.0 };
+        let mut latest_g = F32x3::new(0.0, 0.0, 0.0);
 
         // Record 128 samples synchronized to the Embassy 100 Hz ticker
         for i in 1..=128 {
             ticker.next().await;
 
-            if accel_ok {
-                if let Ok(g) = accel.read_accel_g() {
+            if let Some(dev) = accel.as_mut() {
+                if let Ok(g) = dev.read_g().await {
                     latest_g = g;
                     burst.push(AccelSample {
                         x: g.x,
