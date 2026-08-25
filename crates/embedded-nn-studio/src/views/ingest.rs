@@ -1,15 +1,8 @@
-use crate::state::{DatasetSample, StudioState};
+use crate::state::StudioState;
 use eframe::egui;
 use embedded_nn_live::decode_f32_le;
 use embedded_nn_live::host::{DeviceLink, OwnedMsg, UsbBridge};
-use std::path::{Path, PathBuf};
-
-fn file_name(path: &Path) -> String {
-    path.file_name()
-        .unwrap_or(path.as_os_str())
-        .to_string_lossy()
-        .into_owned()
-}
+use std::path::PathBuf;
 
 /// Label assigned to imported records that carry no label of their own.
 const UNLABELED_IMPORT: &str = "unlabeled_import";
@@ -46,6 +39,10 @@ pub struct IngestView {
     pub current_label: String,
     pub new_class_name: String,
     pub is_recording: bool,
+    pub is_burst_mode: bool,
+    pub burst_length: usize,
+    /// Dedicated buffer accumulating samples during an active recording burst
+    pub active_burst_channels: Vec<Vec<f32>>,
     /// One ring buffer per sensor channel, de-interleaved from `SensorFrame`.
     /// The scope draws every channel; recordings collapse them to a scalar.
     pub live_channels: Vec<Vec<f32>>,
@@ -63,6 +60,9 @@ impl IngestView {
             current_label: "wave_left".into(),
             new_class_name: String::new(),
             is_recording: false,
+            is_burst_mode: true,
+            burst_length: 128,
+            active_burst_channels: Vec::new(),
             live_channels: vec![(0..100).map(|i| ((i as f32) * 0.1).sin() * 0.7).collect()],
             live_time_counter: 0.0,
             import_status: String::new(),
@@ -87,6 +87,106 @@ impl IngestView {
                 }
             }
         }
+        if self.is_recording {
+            if self.active_burst_channels.len() != stride {
+                self.active_burst_channels = vec![Vec::new(); stride];
+            }
+            for step in samples.chunks_exact(stride) {
+                for (channel, value) in self.active_burst_channels.iter_mut().zip(step) {
+                    channel.push(*value);
+                }
+            }
+        }
+    }
+
+    /// Number of samples collected in the current active recording buffer.
+    pub fn recorded_samples_count(&self) -> usize {
+        self.active_burst_channels
+            .iter()
+            .map(Vec::len)
+            .min()
+            .unwrap_or(0)
+    }
+
+    /// Starts a fresh recording burst from the current moment.
+    pub fn start_recording(&mut self) {
+        self.is_recording = true;
+        let stride = self.live_channels.len().max(1);
+        self.active_burst_channels = vec![Vec::new(); stride];
+    }
+
+    /// Commits the active recording buffer into the dataset with the current class tag.
+    pub fn commit_recording(&mut self, state: &mut StudioState) {
+        if self.active_burst_channels.is_empty() {
+            self.is_recording = false;
+            return;
+        }
+        let total_samples = self.recorded_samples_count();
+        let target_len = if self.is_burst_mode && self.burst_length > 0 {
+            total_samples.min(self.burst_length)
+        } else {
+            total_samples
+        };
+
+        if target_len == 0 {
+            self.is_recording = false;
+            self.active_burst_channels.clear();
+            return;
+        }
+
+        let raw_waveform = self.scalar_history_from(&self.active_burst_channels, target_len);
+        let trajectory = self.trajectory_from(&self.active_burst_channels, target_len);
+
+        let prev_classes_len = state.classes.len();
+        let class_idx = state.class_index_or_insert(&self.current_label);
+        let id = state.next_sample_id;
+        state.next_sample_id += 1;
+
+        state.samples.push(crate::state::DatasetSample {
+            id,
+            label: self.current_label.clone(),
+            class_idx,
+            raw_waveform,
+            trajectory,
+            frames: Vec::new(),
+            quantized_frames: Vec::new(),
+        });
+        state.recompute_all_frames();
+        if state.classes.len() != prev_classes_len {
+            state.reset_training();
+        }
+        state.rebuild_model_graph_and_codegen();
+
+        self.is_recording = false;
+        self.active_burst_channels.clear();
+        self.import_status = format!(
+            "Captured sample #{id} ({} samples) tagged '{}'.",
+            target_len, self.current_label
+        );
+    }
+
+    fn scalar_history_from(&self, channels: &[Vec<f32>], max_len: usize) -> Vec<f32> {
+        let len = channels
+            .iter()
+            .map(Vec::len)
+            .min()
+            .unwrap_or(0)
+            .min(max_len);
+        match channels {
+            [] => Vec::new(),
+            [single] => single[..len].to_vec(),
+            multi => (0..len)
+                .map(|i| multi.iter().map(|c| c[i] * c[i]).sum::<f32>().sqrt())
+                .collect(),
+        }
+    }
+
+    fn trajectory_from(&self, channels: &[Vec<f32>], max_len: usize) -> Vec<[f32; 3]> {
+        let [x, y, z] = channels else {
+            return Vec::new();
+        };
+        let len = x.len().min(y.len()).min(z.len()).min(max_len);
+        (0..len).map(|i| [x[i], y[i], z[i]]).collect()
     }
 
     /// Drains the device into the live channel buffers, or advances the
@@ -141,62 +241,15 @@ impl IngestView {
         Some((0..len).map(|i| [x[i], y[i], z[i]]).collect())
     }
 
-    /// Collapses the live channels into the scalar waveform the Mel DSP
-    /// pipeline consumes, using the same magnitude rule as
-    /// `DatasetRecord::scalar_channel` so live captures and file imports agree.
-    fn scalar_history(&self) -> Vec<f32> {
-        let len = self.live_channels.iter().map(Vec::len).min().unwrap_or(0);
-        match self.live_channels.as_slice() {
-            [] => Vec::new(),
-            [single] => single[..len].to_vec(),
-            multi => (0..len)
-                .map(|i| multi.iter().map(|c| c[i] * c[i]).sum::<f32>().sqrt())
-                .collect(),
-        }
-    }
-
     fn import_dataset_files(&mut self, state: &mut StudioState, paths: &[PathBuf]) {
-        let mut imported = 0usize;
-        let mut errors: Vec<String> = Vec::new();
-
-        for path in paths {
-            match std::fs::read_to_string(path).map_err(|e| e.to_string()) {
-                Ok(contents) => match embedded_nn_live::parse_jsonl(&contents) {
-                    Ok(records) => {
-                        for record in records {
-                            let label = record.label_or(UNLABELED_IMPORT);
-                            let class_idx = state.class_index_or_insert(&label);
-                            let id = state.next_sample_id;
-                            state.next_sample_id += 1;
-                            state.samples.push(DatasetSample {
-                                id,
-                                label,
-                                class_idx,
-                                raw_waveform: record.scalar_channel(),
-                                trajectory: record.xyz_trajectory(),
-                                frames: Vec::new(),
-                                quantized_frames: Vec::new(),
-                            });
-                            imported += 1;
-                        }
-                    }
-                    Err(e) => errors.push(format!("{}: {}", file_name(path), e)),
-                },
-                Err(e) => errors.push(format!("{}: {}", file_name(path), e)),
+        match state.import_dataset_paths(paths) {
+            Ok(count) => {
+                self.import_status = format!("Imported {} sample(s).", count);
+            }
+            Err(e) => {
+                self.import_status = format!("Import error: {e}");
             }
         }
-
-        if imported > 0 {
-            state.recompute_all_frames();
-            state.reset_training();
-            state.rebuild_model_graph_and_codegen();
-        }
-
-        self.import_status = if errors.is_empty() {
-            format!("Imported {} sample(s).", imported)
-        } else {
-            format!("Imported {} sample(s). {}", imported, errors.join("; "))
-        };
     }
 
     pub fn show(
@@ -205,6 +258,25 @@ impl IngestView {
         state: &mut StudioState,
         device_link: &mut Option<DeviceLink>,
     ) {
+        // Spacebar shortcut to start/stop burst capture when no text input is active
+        let space_pressed = ui.input(|i| i.key_pressed(egui::Key::Space));
+        let wants_keyboard = ui.ctx().wants_keyboard_input();
+        if space_pressed && !wants_keyboard {
+            if self.is_recording {
+                self.commit_recording(state);
+            } else {
+                self.start_recording();
+            }
+        }
+
+        // Auto-finalize if in burst mode and enough samples accumulated
+        if self.is_recording
+            && self.is_burst_mode
+            && self.recorded_samples_count() >= self.burst_length
+        {
+            self.commit_recording(state);
+        }
+
         ui.horizontal(|ui| {
             ui.heading("📊 1. Data Ingestion, Telemetry & Dataset Tagging");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -225,7 +297,7 @@ impl IngestView {
 
         // Top Control Bar
         egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label("Sensor Source:");
                 egui::ComboBox::from_id_salt("sensor_source_combo")
                     .selected_text(&self.selected_port)
@@ -294,35 +366,40 @@ impl IngestView {
                         });
                 }
 
+                ui.separator();
+
+                ui.checkbox(&mut self.is_burst_mode, "Burst Mode");
+                if self.is_burst_mode {
+                    ui.label("Length:");
+                    ui.add(
+                        egui::DragValue::new(&mut self.burst_length)
+                            .range(16..=1024)
+                            .suffix(" samples"),
+                    );
+                }
+
+                let count = self.recorded_samples_count();
                 let record_btn = if self.is_recording {
-                    egui::Button::new("⏹ Stop Recording").fill(egui::Color32::from_rgb(180, 50, 50))
+                    if self.is_burst_mode {
+                        egui::Button::new(format!(
+                            "⏹ Stop ({}/{}) [Space]",
+                            count, self.burst_length
+                        ))
+                        .fill(egui::Color32::from_rgb(180, 50, 50))
+                    } else {
+                        egui::Button::new(format!("⏹ Stop ({count}) [Space]"))
+                            .fill(egui::Color32::from_rgb(180, 50, 50))
+                    }
                 } else {
-                    egui::Button::new("⏺ Record Sample").fill(egui::Color32::from_rgb(40, 140, 70))
+                    egui::Button::new("⏺ Record Sample [Space]")
+                        .fill(egui::Color32::from_rgb(40, 140, 70))
                 };
 
                 if ui.add(record_btn).clicked() {
-                    self.is_recording = !self.is_recording;
-                    if !self.is_recording {
-                        // Capture recorded buffer into dataset
-                        let class_idx = state
-                            .classes
-                            .iter()
-                            .position(|c| c == &self.current_label)
-                            .unwrap_or(0);
-                        let id = state.next_sample_id;
-                        state.next_sample_id += 1;
-
-                        state.samples.push(crate::state::DatasetSample {
-                            id,
-                            label: self.current_label.clone(),
-                            class_idx,
-                            raw_waveform: self.scalar_history(),
-                            trajectory: self.live_trajectory().unwrap_or_default(),
-                            frames: Vec::new(),
-                            quantized_frames: Vec::new(),
-                        });
-                        state.recompute_all_frames();
-                        state.rebuild_model_graph_and_codegen();
+                    if self.is_recording {
+                        self.commit_recording(state);
+                    } else {
+                        self.start_recording();
                     }
                 }
 
@@ -330,10 +407,35 @@ impl IngestView {
 
                 if ui.button("📂 Import Dataset File(s)").clicked()
                     && let Some(paths) = rfd::FileDialog::new()
-                        .add_filter("JSON Lines dataset", &["jsonl", "ndjson"])
+                        .add_filter(
+                            "Dataset Interchange (.jsonl, .csv, .json)",
+                            &["jsonl", "ndjson", "json", "csv", "tsv"],
+                        )
                         .pick_files()
                 {
                     self.import_dataset_files(state, &paths);
+                }
+
+                if ui.button("💾 Export Dataset (.jsonl)").clicked() {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_file_name("dataset.jsonl")
+                        .add_filter("JSON Lines dataset", &["jsonl", "ndjson"])
+                        .save_file()
+                    {
+                        self.import_status = match state.export_dataset_jsonl(&path) {
+                            Ok(msg) => msg,
+                            Err(err) => err,
+                        };
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        self.import_status =
+                            match state.export_dataset_jsonl(Path::new("dataset.jsonl")) {
+                                Ok(msg) => msg,
+                                Err(err) => err,
+                            };
+                    }
                 }
             });
 
@@ -355,7 +457,20 @@ impl IngestView {
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if self.is_recording {
-                            ui.colored_label(egui::Color32::from_rgb(255, 80, 80), "● RECORDING");
+                            let count = self.recorded_samples_count();
+                            let label = if self.is_burst_mode {
+                                let pct = (count as f32 / self.burst_length.max(1) as f32)
+                                    .clamp(0.0, 1.0);
+                                format!(
+                                    "● RECORDING: {}/{} ({:.0}%)",
+                                    count,
+                                    self.burst_length,
+                                    pct * 100.0
+                                )
+                            } else {
+                                format!("● RECORDING: {} samples", count)
+                            };
+                            ui.colored_label(egui::Color32::from_rgb(255, 80, 80), label);
                         } else {
                             ui.colored_label(
                                 egui::Color32::from_rgb(80, 200, 120),
@@ -394,10 +509,8 @@ impl IngestView {
                         channel_color(channel),
                     );
                     for i in 0..n - 1 {
-                        let p1 = egui::pos2(
-                            rect.left() + (i as f32) * dx,
-                            mid_y - history[i] * scale_y,
-                        );
+                        let p1 =
+                            egui::pos2(rect.left() + (i as f32) * dx, mid_y - history[i] * scale_y);
                         let p2 = egui::pos2(
                             rect.left() + ((i + 1) as f32) * dx,
                             mid_y - history[i + 1] * scale_y,
@@ -662,5 +775,120 @@ mod tests {
         assert!(view.import_status.contains("line 1"));
 
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn burst_recording_accumulates_exact_samples_and_tags_class() {
+        let mut view = IngestView::new();
+        let mut state = StudioState::default();
+        let initial_samples = state.samples.len();
+
+        view.current_label = "custom_gesture".into();
+        view.is_burst_mode = true;
+        view.burst_length = 64;
+
+        view.start_recording();
+        assert!(view.is_recording);
+        assert_eq!(view.recorded_samples_count(), 0);
+
+        // Push 64 3-axis samples (simulating 64 sensor ticks)
+        for _ in 0..64 {
+            view.push_sensor_samples(&[0.1, 0.2, 0.9], 3);
+        }
+
+        assert_eq!(view.recorded_samples_count(), 64);
+
+        view.commit_recording(&mut state);
+        assert!(!view.is_recording);
+        assert_eq!(state.samples.len(), initial_samples + 1);
+
+        let sample = state.samples.last().unwrap();
+        assert_eq!(sample.label, "custom_gesture");
+        assert_eq!(sample.raw_waveform.len(), 64);
+        assert_eq!(sample.trajectory.len(), 64);
+    }
+
+    #[test]
+    fn export_dataset_jsonl_roundtrips_records() {
+        let state = StudioState::default();
+        let path = std::env::temp_dir().join("enn_test_export.jsonl");
+
+        let res = state.export_dataset_jsonl(&path);
+        assert!(res.is_ok());
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let parsed = embedded_nn_live::parse_jsonl(&contents).unwrap();
+        assert_eq!(parsed.len(), state.samples.len());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_burst_recording_auto_finalizes_in_show() {
+        let mut view = IngestView::new();
+        let mut state = StudioState::default();
+        let initial_samples = state.samples.len();
+
+        view.current_label = "auto_burst_class".into();
+        view.is_burst_mode = true;
+        view.burst_length = 32;
+
+        view.start_recording();
+        assert!(view.is_recording);
+
+        for _ in 0..32 {
+            view.push_sensor_samples(&[0.5, -0.5, 1.0], 3);
+        }
+
+        // Run an egui show frame to trigger auto-finalization
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 1000.0),
+            )),
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut device_link = None;
+                view.show(ui, &mut state, &mut device_link);
+            });
+        });
+
+        assert!(
+            !view.is_recording,
+            "Burst must auto-finalize once target samples reached"
+        );
+        assert_eq!(state.samples.len(), initial_samples + 1);
+        assert_eq!(state.samples.last().unwrap().label, "auto_burst_class");
+    }
+
+    #[test]
+    fn test_view_renders_export_and_burst_ui() {
+        let mut view = IngestView::new();
+        let mut state = StudioState::default();
+
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 1000.0),
+            )),
+            ..Default::default()
+        };
+        let output = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut device_link = None;
+                view.show(ui, &mut state, &mut device_link);
+            });
+        });
+
+        let mut painted = String::new();
+        collect_text(output.shapes.iter().map(|c| &c.shape), &mut painted);
+
+        assert!(painted.contains("Burst Mode"));
+        assert!(painted.contains("Record Sample [Space]"));
+        assert!(painted.contains("Export Dataset"));
     }
 }

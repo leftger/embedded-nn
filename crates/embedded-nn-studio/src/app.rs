@@ -110,6 +110,24 @@ impl eframe::App for EmbeddedNnStudioApp {
                 {
                     let _ = self.state.import_json_path(path);
                 }
+                if ui.button("Open Dataset (.jsonl/csv)").clicked()
+                    && let Some(paths) = rfd::FileDialog::new()
+                        .add_filter(
+                            "Dataset Interchange (.jsonl, .csv, .json)",
+                            &["jsonl", "ndjson", "json", "csv", "tsv"],
+                        )
+                        .pick_files()
+                {
+                    match self.state.import_dataset_paths(&paths) {
+                        Ok(n) => {
+                            self.ingest_view.import_status = format!("Imported {n} sample(s).");
+                            self.current_tab = StudioTab::Ingest;
+                        }
+                        Err(e) => {
+                            self.ingest_view.import_status = format!("Import error: {e}");
+                        }
+                    }
+                }
                 match &self.state.model_import_status {
                     ModelImportStatus::Idle => {}
                     ModelImportStatus::Imported(message) => {
@@ -158,6 +176,51 @@ impl eframe::App for EmbeddedNnStudioApp {
                 ui.label("➔");
                 ui.selectable_value(&mut self.current_tab, StudioTab::Inspector, tab_7_label);
             });
+        });
+
+        // Handle dropped files (drag & drop import for datasets and models)
+        ctx.input(|i| {
+            if !i.raw.dropped_files.is_empty() {
+                let paths: Vec<std::path::PathBuf> = i
+                    .raw
+                    .dropped_files
+                    .iter()
+                    .filter_map(|f| f.path.clone())
+                    .collect();
+                if !paths.is_empty() {
+                    let mut dataset_paths = Vec::new();
+                    for path in paths {
+                        let ext = path
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_ascii_lowercase();
+                        if ext == "tflite" {
+                            let _ = self.state.import_tflite_path(path);
+                        } else if ext == "jsonl" || ext == "ndjson" || ext == "csv" || ext == "tsv"
+                        {
+                            dataset_paths.push(path);
+                        } else if ext == "json" {
+                            if self.state.import_json_path(path.clone()).is_err() {
+                                dataset_paths.push(path);
+                            }
+                        }
+                    }
+                    if !dataset_paths.is_empty() {
+                        match self.state.import_dataset_paths(&dataset_paths) {
+                            Ok(n) => {
+                                self.ingest_view.import_status =
+                                    format!("Imported {n} sample(s) from drag-and-drop.");
+                                self.current_tab = StudioTab::Ingest;
+                            }
+                            Err(e) => {
+                                self.ingest_view.import_status =
+                                    format!("Drag-and-drop import error: {e}");
+                            }
+                        }
+                    }
+                }
+            }
         });
 
         // Drain the device on every frame, not just while Ingest is visible,

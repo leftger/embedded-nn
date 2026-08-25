@@ -1837,6 +1837,127 @@ impl StudioState {
         ))
     }
 
+    pub fn export_dataset_jsonl(&self, jsonl_path: &Path) -> Result<String, String> {
+        if let Some(parent) = jsonl_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let mut lines = Vec::with_capacity(self.samples.len());
+        for sample in &self.samples {
+            let (channel_names, waveform) = if !sample.trajectory.is_empty() {
+                (
+                    vec!["x".to_string(), "y".to_string(), "z".to_string()],
+                    sample
+                        .trajectory
+                        .iter()
+                        .map(|[x, y, z]| vec![*x, *y, *z])
+                        .collect(),
+                )
+            } else {
+                (
+                    vec!["value".to_string()],
+                    sample.raw_waveform.iter().map(|v| vec![*v]).collect(),
+                )
+            };
+            let record = embedded_nn_live::DatasetRecord {
+                sample_id: format!("sample_{:04}", sample.id),
+                label: Some(sample.label.clone()),
+                sample_rate_hz: self.dsp.sample_rate,
+                channel_names,
+                waveform,
+            };
+            let line = serde_json::to_string(&record).map_err(|error| {
+                format!(
+                    "Dataset serialize failed for sample #{}: {error}",
+                    sample.id
+                )
+            })?;
+            lines.push(line);
+        }
+        let mut content = lines.join("\n");
+        if !content.is_empty() {
+            content.push('\n');
+        }
+        std::fs::write(jsonl_path, content)
+            .map_err(|error| format!("Dataset export failed: {error}"))?;
+        Ok(format!(
+            "Exported {} sample(s) to {}",
+            self.samples.len(),
+            jsonl_path.display()
+        ))
+    }
+
+    pub fn import_dataset_paths(&mut self, paths: &[PathBuf]) -> Result<usize, String> {
+        let mut imported = 0usize;
+        let mut errors: Vec<String> = Vec::new();
+
+        for path in paths {
+            let file_name = path
+                .file_name()
+                .unwrap_or(path.as_os_str())
+                .to_string_lossy()
+                .into_owned();
+
+            let contents = match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    errors.push(format!("{file_name}: {e}"));
+                    continue;
+                }
+            };
+
+            let ext = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+
+            let records_res = if ext == "csv" || ext == "tsv" {
+                parse_csv_dataset(path, &contents, self.dsp.sample_rate)
+            } else if ext == "json" {
+                parse_json_dataset(&contents)
+            } else {
+                match embedded_nn_live::parse_jsonl(&contents) {
+                    Ok(r) => Ok(r),
+                    Err(e) => parse_json_dataset(&contents)
+                        .map_err(|_| format!("Line {}: {}", e.line, e.source)),
+                }
+            };
+
+            match records_res {
+                Ok(records) => {
+                    for record in records {
+                        let label = record.label_or("unlabeled_import");
+                        let class_idx = self.class_index_or_insert(&label);
+                        let id = self.next_sample_id;
+                        self.next_sample_id += 1;
+                        self.samples.push(DatasetSample {
+                            id,
+                            label,
+                            class_idx,
+                            raw_waveform: record.scalar_channel(),
+                            trajectory: record.xyz_trajectory(),
+                            frames: Vec::new(),
+                            quantized_frames: Vec::new(),
+                        });
+                        imported += 1;
+                    }
+                }
+                Err(e) => errors.push(format!("{file_name}: {e}")),
+            }
+        }
+
+        if imported > 0 {
+            self.recompute_all_frames();
+            self.reset_training();
+            self.rebuild_model_graph_and_codegen();
+            Ok(imported)
+        } else if !errors.is_empty() {
+            Err(errors.join("; "))
+        } else {
+            Err("No valid dataset records found".into())
+        }
+    }
+
     pub fn export_rust_crate(&self, target_dir: &Path) -> Result<String, String> {
         let Some(graph) = &self.compiled_graph else {
             return Err("No compiled ModelGraph available to export".into());
@@ -1952,6 +2073,76 @@ impl StudioState {
         self.last_device_cycles = Some(cycles);
         self.last_device_logits = logits.iter().map(|&value| value as i8).collect();
     }
+}
+
+fn parse_json_dataset(contents: &str) -> Result<Vec<embedded_nn_live::DatasetRecord>, String> {
+    if let Ok(records) = serde_json::from_str::<Vec<embedded_nn_live::DatasetRecord>>(contents) {
+        return Ok(records);
+    }
+    if let Ok(single) = serde_json::from_str::<embedded_nn_live::DatasetRecord>(contents) {
+        return Ok(vec![single]);
+    }
+    Err("Invalid JSON dataset format (expected JSON array or DatasetRecord object)".into())
+}
+
+fn parse_csv_dataset(
+    path: &Path,
+    contents: &str,
+    sample_rate_hz: f32,
+) -> Result<Vec<embedded_nn_live::DatasetRecord>, String> {
+    let mut lines = contents.lines().map(str::trim).filter(|l| !l.is_empty());
+    let Some(first_line) = lines.next() else {
+        return Err("File is empty or contains no sensor data".into());
+    };
+
+    let first_tokens: Vec<&str> = first_line.split(',').map(str::trim).collect();
+    let is_header = first_tokens.iter().any(|t| t.parse::<f32>().is_err());
+
+    let (channel_names, data_lines) = if is_header {
+        (
+            first_tokens.iter().map(|s| s.to_string()).collect(),
+            lines.collect::<Vec<_>>(),
+        )
+    } else {
+        let default_names = match first_tokens.len() {
+            1 => vec!["value".to_string()],
+            3 => vec!["x".to_string(), "y".to_string(), "z".to_string()],
+            n => (0..n).map(|i| format!("ch{i}")).collect(),
+        };
+        let mut all_lines = vec![first_line];
+        all_lines.extend(lines);
+        (default_names, all_lines)
+    };
+
+    let mut waveform = Vec::with_capacity(data_lines.len());
+    for line in data_lines {
+        let mut row = Vec::with_capacity(channel_names.len());
+        for val_str in line.split(',') {
+            if let Ok(v) = val_str.trim().parse::<f32>() {
+                row.push(v);
+            }
+        }
+        if !row.is_empty() {
+            waveform.push(row);
+        }
+    }
+
+    if waveform.is_empty() {
+        return Err("CSV file contains no numeric sensor data rows".into());
+    }
+
+    let file_stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("csv_sample");
+
+    Ok(vec![embedded_nn_live::DatasetRecord {
+        sample_id: file_stem.to_string(),
+        label: Some(file_stem.to_string()),
+        sample_rate_hz,
+        channel_names,
+        waveform,
+    }])
 }
 
 #[cfg(test)]
@@ -2338,5 +2529,131 @@ mod tests {
                 ModelSource::ZooPreset(preset.title().to_string())
             );
         }
+    }
+
+    #[test]
+    fn test_import_dataset_csv_format() {
+        let mut state = StudioState::default();
+        let initial_len = state.samples.len();
+        let csv_path = std::env::temp_dir().join("test_gesture.csv");
+        let csv_content = "ax,ay,az\n0.1,0.2,0.9\n0.15,0.25,0.85\n0.2,0.3,0.8\n";
+        std::fs::write(&csv_path, csv_content).unwrap();
+
+        let res = state.import_dataset_paths(&[csv_path.clone()]);
+        assert_eq!(res.unwrap(), 1);
+        assert_eq!(state.samples.len(), initial_len + 1);
+
+        let sample = state.samples.last().unwrap();
+        assert_eq!(sample.label, "test_gesture");
+        assert_eq!(sample.trajectory.len(), 3);
+        assert_eq!(sample.raw_waveform.len(), 3);
+
+        let _ = std::fs::remove_file(&csv_path);
+    }
+
+    #[test]
+    fn test_import_dataset_json_array_format() {
+        let mut state = StudioState::default();
+        let initial_len = state.samples.len();
+        let json_path = std::env::temp_dir().join("test_records.json");
+        let json_content = r#"[
+            {"sample_id":"rec1","label":"tap","sample_rate_hz":100.0,"channel_names":["x","y","z"],"waveform":[[0.1,0.2,0.3],[0.4,0.5,0.6]]},
+            {"sample_id":"rec2","label":"shake","sample_rate_hz":100.0,"channel_names":["value"],"waveform":[[1.0],[-1.0]]}
+        ]"#;
+        std::fs::write(&json_path, json_content).unwrap();
+
+        let res = state.import_dataset_paths(&[json_path.clone()]);
+        assert_eq!(res.unwrap(), 2);
+        assert_eq!(state.samples.len(), initial_len + 2);
+
+        let _ = std::fs::remove_file(&json_path);
+    }
+
+    #[test]
+    fn test_import_dataset_csv_without_header() {
+        let mut state = StudioState::default();
+        let initial_len = state.samples.len();
+        let csv_path = std::env::temp_dir().join("raw_numbers.csv");
+        let csv_content = "1.0,2.0,3.0\n4.0,5.0,6.0\n7.0,8.0,9.0\n";
+        std::fs::write(&csv_path, csv_content).unwrap();
+
+        let res = state.import_dataset_paths(&[csv_path.clone()]);
+        assert_eq!(res.unwrap(), 1);
+        assert_eq!(state.samples.len(), initial_len + 1);
+
+        let sample = state.samples.last().unwrap();
+        assert_eq!(sample.label, "raw_numbers");
+        assert_eq!(sample.trajectory.len(), 3);
+
+        let _ = std::fs::remove_file(&csv_path);
+    }
+
+    #[test]
+    fn test_import_dataset_tsv_format() {
+        let mut state = StudioState::default();
+        let initial_len = state.samples.len();
+        let tsv_path = std::env::temp_dir().join("sensor_tab.tsv");
+        let tsv_content = "1.5,2.5,3.5\n4.5,5.5,6.5\n";
+        std::fs::write(&tsv_path, tsv_content).unwrap();
+
+        let res = state.import_dataset_paths(&[tsv_path.clone()]);
+        assert_eq!(res.unwrap(), 1);
+        assert_eq!(state.samples.len(), initial_len + 1);
+
+        let _ = std::fs::remove_file(&tsv_path);
+    }
+
+    #[test]
+    fn test_import_dataset_single_json_object() {
+        let mut state = StudioState::default();
+        let initial_len = state.samples.len();
+        let json_path = std::env::temp_dir().join("single_record.json");
+        let json_content = r#"{"sample_id":"s_one","label":"vibration_alert","sample_rate_hz":200.0,"channel_names":["mag"],"waveform":[[0.5],[-0.5],[1.2]]}"#;
+        std::fs::write(&json_path, json_content).unwrap();
+
+        let res = state.import_dataset_paths(&[json_path.clone()]);
+        assert_eq!(res.unwrap(), 1);
+        assert_eq!(state.samples.len(), initial_len + 1);
+
+        let sample = state.samples.last().unwrap();
+        assert_eq!(sample.label, "vibration_alert");
+        assert_eq!(sample.raw_waveform.len(), 3);
+
+        let _ = std::fs::remove_file(&json_path);
+    }
+
+    #[test]
+    fn test_import_dataset_empty_file_returns_error() {
+        let mut state = StudioState::default();
+        let empty_path = std::env::temp_dir().join("empty_dataset.csv");
+        std::fs::write(&empty_path, "").unwrap();
+
+        let res = state.import_dataset_paths(&[empty_path.clone()]);
+        assert!(res.is_err());
+
+        let _ = std::fs::remove_file(&empty_path);
+    }
+
+    #[test]
+    fn test_import_dataset_mixed_batch() {
+        let mut state = StudioState::default();
+        let initial_len = state.samples.len();
+
+        let csv_path = std::env::temp_dir().join("batch1.csv");
+        std::fs::write(&csv_path, "x,y,z\n0.1,0.2,0.3\n0.4,0.5,0.6\n").unwrap();
+
+        let jsonl_path = std::env::temp_dir().join("batch2.jsonl");
+        std::fs::write(
+            &jsonl_path,
+            "{\"sample_id\":\"b2_1\",\"label\":\"swipe\",\"sample_rate_hz\":100.0,\"channel_names\":[\"v\"],\"waveform\":[[0.1],[0.2]]}\n",
+        )
+        .unwrap();
+
+        let res = state.import_dataset_paths(&[csv_path.clone(), jsonl_path.clone()]);
+        assert_eq!(res.unwrap(), 2);
+        assert_eq!(state.samples.len(), initial_len + 2);
+
+        let _ = std::fs::remove_file(&csv_path);
+        let _ = std::fs::remove_file(&jsonl_path);
     }
 }
