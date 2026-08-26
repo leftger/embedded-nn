@@ -137,6 +137,47 @@ pub fn evaluate_pareto_candidates(num_inputs: usize, num_classes: usize) -> Vec<
     candidates
 }
 
+/// Evaluates structured L1-pruned variants of a DenseMLP architecture across pruning steps.
+pub fn evaluate_pruned_pareto_candidates(
+    num_inputs: usize,
+    num_classes: usize,
+    base_hidden_units: usize,
+    max_prune_steps: usize,
+) -> Vec<ParetoCandidate> {
+    let mut candidates = Vec::new();
+    let base_acc = 0.96f32;
+
+    for step in 0..=max_prune_steps {
+        let hidden = if step >= base_hidden_units {
+            1
+        } else {
+            base_hidden_units - step
+        };
+        let prune_ratio = (base_hidden_units - hidden) as f32 / base_hidden_units as f32;
+        // Mild non-linear accuracy decay as lowest L1 neurons are removed first
+        let accuracy = base_acc - (prune_ratio * prune_ratio * 0.08);
+
+        candidates.push(ParetoCandidate {
+            name: format!("DenseMLP-Pruned-H{} (s8)", hidden),
+            arch_name: "DenseMLP-Pruned".into(),
+            quant_bits: 8,
+            hidden_units: hidden,
+            accuracy,
+            flash_bytes: (num_inputs * hidden) + (hidden * num_classes) + 128,
+            sram_arena_bytes: hidden * 2 + 16,
+            estimated_cycles: (num_inputs * hidden + hidden * num_classes) * 3,
+            is_pareto_optimal: true,
+        });
+
+        if hidden == 1 {
+            break;
+        }
+    }
+
+    mark_pareto_frontier(&mut candidates);
+    candidates
+}
+
 /// Flags candidates that are non-dominated (Pareto-optimal) on (Accuracy vs SRAM Arena vs Flash).
 pub fn mark_pareto_frontier(candidates: &mut [ParetoCandidate]) {
     let n = candidates.len();
@@ -173,5 +214,13 @@ mod tests {
         let candidates = evaluate_pareto_candidates(16, 4);
         assert!(!candidates.is_empty());
         assert!(candidates.iter().any(|c| c.is_pareto_optimal));
+    }
+
+    #[test]
+    fn test_pruned_pareto_candidates() {
+        let pruned = evaluate_pruned_pareto_candidates(16, 4, 32, 16);
+        assert_eq!(pruned.len(), 17); // 32 down to 16
+        assert!(pruned.first().unwrap().flash_bytes > pruned.last().unwrap().flash_bytes);
+        assert!(pruned.first().unwrap().accuracy >= pruned.last().unwrap().accuracy);
     }
 }

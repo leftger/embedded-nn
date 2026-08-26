@@ -90,6 +90,50 @@ pub const fn pack_q15x2_32x1(v0: i16, v1: i16) -> i32 {
     ((v0 as u16 as i32) & 0xFFFF) | ((v1 as u16 as i32) << 16)
 }
 
+/// Hardware-accelerated or branchless signed 8-bit saturation (`SSAT #8`).
+#[inline(always)]
+pub fn saturate_s8(val: i32) -> i8 {
+    #[cfg(all(target_arch = "arm", target_feature = "dsp"))]
+    {
+        let res: i32;
+        unsafe {
+            core::arch::asm!(
+                "ssat {out}, #8, {val}",
+                val = in(reg) val,
+                out = lateout(reg) res,
+                options(pure, nomem, nostack)
+            );
+        }
+        res as i8
+    }
+    #[cfg(not(all(target_arch = "arm", target_feature = "dsp")))]
+    {
+        clamp(val, -128, 127) as i8
+    }
+}
+
+/// Hardware-accelerated or branchless signed 16-bit saturation (`SSAT #16`).
+#[inline(always)]
+pub fn saturate_s16(val: i32) -> i16 {
+    #[cfg(all(target_arch = "arm", target_feature = "dsp"))]
+    {
+        let res: i32;
+        unsafe {
+            core::arch::asm!(
+                "ssat {out}, #16, {val}",
+                val = in(reg) val,
+                out = lateout(reg) res,
+                options(pure, nomem, nostack)
+            );
+        }
+        res as i16
+    }
+    #[cfg(not(all(target_arch = "arm", target_feature = "dsp")))]
+    {
+        clamp(val, -32768, 32767) as i16
+    }
+}
+
 /// Quantizes a 32-bit floating point value into an 8-bit signed integer (`s8`) given scale and zero point.
 ///
 /// Formula: `clamp(round(val / scale) + zero_point, -128, 127)`
@@ -105,7 +149,7 @@ pub fn quantize_f32_to_s8(val: f32, scale: f32, zero_point: i32) -> i8 {
         (scaled - 0.5) as i32
     };
     let q = rounded + zero_point;
-    clamp(q, i8::MIN as i32, i8::MAX as i32) as i8
+    saturate_s8(q)
 }
 
 /// Dequantizes an 8-bit signed integer (`s8`) into a 32-bit floating point value given scale and zero point.
@@ -131,7 +175,7 @@ pub fn quantize_f32_to_s16(val: f32, scale: f32, zero_point: i32) -> i16 {
         (scaled - 0.5) as i32
     };
     let q = rounded + zero_point;
-    clamp(q, i16::MIN as i32, i16::MAX as i32) as i16
+    saturate_s16(q)
 }
 
 /// Dequantizes a 16-bit signed integer (`s16`) into a 32-bit floating point value given scale and zero point.
@@ -225,5 +269,23 @@ mod tests {
         assert_eq!(q, 40);
         let f = dequantize_s16_to_f32(q, scale, zero_point);
         assert!((f - 2.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_saturate_s8() {
+        assert_eq!(saturate_s8(0), 0);
+        assert_eq!(saturate_s8(100), 100);
+        assert_eq!(saturate_s8(-100), -100);
+        assert_eq!(saturate_s8(200), 127);
+        assert_eq!(saturate_s8(-200), -128);
+    }
+
+    #[test]
+    fn test_saturate_s16() {
+        assert_eq!(saturate_s16(0), 0);
+        assert_eq!(saturate_s16(20000), 20000);
+        assert_eq!(saturate_s16(-20000), -20000);
+        assert_eq!(saturate_s16(50000), 32767);
+        assert_eq!(saturate_s16(-50000), -32768);
     }
 }

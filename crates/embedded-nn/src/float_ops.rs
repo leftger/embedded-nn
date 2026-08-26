@@ -192,6 +192,11 @@ pub fn relu6_f32(data: &mut [f32]) {
     }
 }
 
+pub use crate::activations::{
+    fast_sigmoid_f32_slice, fast_sigmoid_lut_derivative_f32, fast_sigmoid_lut_f32,
+    fast_sigmoid_rational_f32, fast_tanh_derivative_f32, fast_tanh_f32, fast_tanh_f32_slice,
+};
+
 /// Fast and accurate pure no-std exp(x) implementation for f32 using range reduction.
 fn exp_f32(x: f32) -> f32 {
     if x < -88.0 {

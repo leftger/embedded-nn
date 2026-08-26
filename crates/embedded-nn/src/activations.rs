@@ -205,6 +205,112 @@ pub fn tanh_s16(input: &[i16], output: &mut [i16], left_shift: i32) {
     }
 }
 
+/// 23-point Sigmoid output values over integer points [-11.0, +11.0].
+const SIGMOID_FAST_LUT: [f32; 23] = [
+    0.0, 0.000045, 0.000123, 0.000335, 0.000911, 0.002473, 0.006693, 0.017986, 0.047426, 0.119203,
+    0.268941, 0.500000, 0.731059, 0.880797, 0.952574, 0.982014, 0.993307, 0.997527, 0.999089,
+    0.999665, 0.999877, 0.999955, 1.0,
+];
+
+/// 23-point Sigmoid derivative values over integer points [-11.0, +11.0].
+const SIGMOID_DERIVATIVE_FAST_LUT: [f32; 23] = [
+    0.0, 0.000045, 0.000123, 0.000335, 0.000910, 0.002467, 0.006648, 0.017663, 0.045177, 0.104994,
+    0.196612, 0.250000, 0.196612, 0.104994, 0.045177, 0.017663, 0.006648, 0.002466, 0.000910,
+    0.000335, 0.000123, 0.000045, 0.0,
+];
+
+#[inline(always)]
+fn no_std_floor_f32(x: f32) -> f32 {
+    let i = x as i32;
+    if (x < 0.0) && (x != i as f32) {
+        (i - 1) as f32
+    } else {
+        i as f32
+    }
+}
+
+#[inline(always)]
+fn no_std_abs_f32(x: f32) -> f32 {
+    if x < 0.0 { -x } else { x }
+}
+
+/// Fast rational TanH approximation: `f(x) = x / (1.0 + |x|)` without transcendental calls.
+#[inline(always)]
+pub fn fast_tanh_f32(x: f32) -> f32 {
+    x / (1.0 + no_std_abs_f32(x))
+}
+
+/// Derivative of fast rational TanH approximation: `f'(x) = 1.0 / (1.0 + |x|)^2`.
+#[inline(always)]
+pub fn fast_tanh_derivative_f32(x: f32) -> f32 {
+    let denom = 1.0 + no_std_abs_f32(x);
+    1.0 / (denom * denom)
+}
+
+/// In-place fast rational TanH for a 32-bit floating point slice.
+pub fn fast_tanh_f32_slice(data: &mut [f32]) {
+    for val in data.iter_mut() {
+        *val = fast_tanh_f32(*val);
+    }
+}
+
+/// Fast Sigmoid activation using a 23-point linear interpolation table over `[-11.0, +11.0]`.
+pub fn fast_sigmoid_lut_f32(x: f32) -> f32 {
+    if x <= -11.0 {
+        return 0.0;
+    }
+    if x >= 11.0 {
+        return 1.0;
+    }
+
+    let fl = no_std_floor_f32(x);
+    let mut index = (fl as i32) + 11;
+    let fraction = x - fl;
+
+    if index < 0 {
+        index = 0;
+    } else if index > 21 {
+        index = 21;
+    }
+
+    let i = index as usize;
+    SIGMOID_FAST_LUT[i] + (SIGMOID_FAST_LUT[i + 1] - SIGMOID_FAST_LUT[i]) * fraction
+}
+
+/// Derivative of fast Sigmoid using a 23-point linear interpolation table over `[-11.0, +11.0]`.
+pub fn fast_sigmoid_lut_derivative_f32(x: f32) -> f32 {
+    if x <= -11.0 || x >= 11.0 {
+        return 0.0;
+    }
+
+    let fl = no_std_floor_f32(x);
+    let mut index = (fl as i32) + 11;
+    let fraction = x - fl;
+
+    if index < 0 {
+        index = 0;
+    } else if index > 21 {
+        index = 21;
+    }
+
+    let i = index as usize;
+    SIGMOID_DERIVATIVE_FAST_LUT[i]
+        + (SIGMOID_DERIVATIVE_FAST_LUT[i + 1] - SIGMOID_DERIVATIVE_FAST_LUT[i]) * fraction
+}
+
+/// Fast rational Sigmoid approximation: `0.5 * (1.0 + fast_tanh(0.5 * x))`.
+#[inline(always)]
+pub fn fast_sigmoid_rational_f32(x: f32) -> f32 {
+    0.5 * (1.0 + fast_tanh_f32(0.5 * x))
+}
+
+/// In-place fast Sigmoid for a 32-bit floating point slice.
+pub fn fast_sigmoid_f32_slice(data: &mut [f32]) {
+    for val in data.iter_mut() {
+        *val = fast_sigmoid_lut_f32(*val);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,5 +338,49 @@ mod tests {
         assert!((output[0] as i32).abs() <= 5);
         assert!(output[1] > 100);
         assert!(output[2] < -100);
+    }
+
+    #[test]
+    fn test_fast_tanh_f32() {
+        assert_eq!(fast_tanh_f32(0.0), 0.0);
+        assert!((fast_tanh_f32(1.0) - 0.5).abs() < 1e-6);
+        assert!((fast_tanh_f32(-1.0) - (-0.5)).abs() < 1e-6);
+        assert!(fast_tanh_f32(100.0) < 1.0 && fast_tanh_f32(100.0) > 0.98);
+        assert!(fast_tanh_f32(-100.0) > -1.0 && fast_tanh_f32(-100.0) < -0.98);
+
+        // Derivative tests
+        assert_eq!(fast_tanh_derivative_f32(0.0), 1.0);
+        assert!((fast_tanh_derivative_f32(1.0) - 0.25).abs() < 1e-6);
+
+        let mut slice = [-2.0, 0.0, 2.0];
+        fast_tanh_f32_slice(&mut slice);
+        assert!((slice[0] - (-2.0 / 3.0)).abs() < 1e-6);
+        assert_eq!(slice[1], 0.0);
+        assert!((slice[2] - (2.0 / 3.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_fast_sigmoid_lut_f32() {
+        assert!((fast_sigmoid_lut_f32(0.0) - 0.5).abs() < 1e-6);
+        assert!(fast_sigmoid_lut_f32(-15.0) == 0.0);
+        assert!(fast_sigmoid_lut_f32(15.0) == 1.0);
+        assert!((fast_sigmoid_lut_f32(2.0) - 0.880797).abs() < 1e-3);
+        assert!((fast_sigmoid_lut_f32(-2.0) - 0.119203).abs() < 1e-3);
+
+        // Derivative test
+        assert!((fast_sigmoid_lut_derivative_f32(0.0) - 0.25).abs() < 1e-6);
+
+        let mut slice = [-15.0, 0.0, 15.0];
+        fast_sigmoid_f32_slice(&mut slice);
+        assert_eq!(slice[0], 0.0);
+        assert!((slice[1] - 0.5).abs() < 1e-6);
+        assert_eq!(slice[2], 1.0);
+    }
+
+    #[test]
+    fn test_fast_sigmoid_rational_f32() {
+        assert_eq!(fast_sigmoid_rational_f32(0.0), 0.5);
+        assert!(fast_sigmoid_rational_f32(10.0) > 0.9);
+        assert!(fast_sigmoid_rational_f32(-10.0) < 0.1);
     }
 }

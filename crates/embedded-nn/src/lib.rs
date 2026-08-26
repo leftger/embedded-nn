@@ -40,8 +40,10 @@
 pub mod activations;
 pub mod anomaly;
 pub mod basic_math;
+pub mod calibration;
 pub mod concat;
 pub mod convolution;
+pub mod early_exit;
 #[cfg(feature = "dsp")]
 pub mod feature_dsp;
 pub mod float_ops;
@@ -62,6 +64,19 @@ pub mod tensor;
 pub mod transpose;
 pub mod types;
 
+pub use activations::{
+    fast_sigmoid_f32_slice, fast_sigmoid_lut_derivative_f32, fast_sigmoid_lut_f32,
+    fast_sigmoid_rational_f32, fast_tanh_derivative_f32, fast_tanh_f32, fast_tanh_f32_slice,
+};
+pub use anomaly::{
+    AnomalyResult, DistanceMetric, FewShotPrototypeMatcherF32, FewShotPrototypeMatcherS8,
+    MahalanobisAnomalyDetector, ReconstructionAnomalyDetector, cosine_similarity_f32,
+    cosine_similarity_s8, euclidean_distance_f32, euclidean_distance_s8, manhattan_distance_f32,
+    manhattan_distance_s8,
+};
+pub use calibration::{OutputLayerCalibratorF32, OutputLayerCalibratorS8};
+pub use early_exit::{EarlyExitDecision, EarlyExitGateF32, EarlyExitGateS8};
+
 #[cfg(feature = "libm")]
 pub use ml::{
     GaussianNaiveBayesInstanceF32, SvmInstanceF32, SvmKernelType, hz_to_mel, mel_filterbank_f32,
@@ -71,7 +86,7 @@ pub use ml::{
 pub use support::{
     clamp, dequantize_s8_to_f32, dequantize_s16_to_f32, divide_by_power_of_two,
     doubling_high_mult_no_sat, pack_q15x2_32x1, pack_s8x4_32x1, quantize_f32_to_s8,
-    quantize_f32_to_s16, requantize, requantize_s64,
+    quantize_f32_to_s16, requantize, requantize_s64, saturate_s8, saturate_s16,
 };
 pub use types::{
     Activation, Context, ConvParams, Dims, DwConvParams, Error, FcParams, FusedActivation,
