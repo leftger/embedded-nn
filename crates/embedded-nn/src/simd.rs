@@ -45,7 +45,7 @@ pub fn vec_dot_s8(lhs: &[i8], rhs: &[i8], lhs_offset: i32) -> i32 {
             acc += l * r;
         }
 
-        return acc;
+        acc
     }
 
     #[cfg(not(all(target_arch = "arm", target_feature = "dsp")))]

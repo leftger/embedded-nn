@@ -4,9 +4,6 @@ use embedded_nn_live::decode_f32_le;
 use embedded_nn_live::host::{DeviceLink, OwnedMsg, UsbBridge};
 use std::path::PathBuf;
 
-/// Label assigned to imported records that carry no label of their own.
-const UNLABELED_IMPORT: &str = "unlabeled_import";
-
 /// Points retained per channel in the live oscilloscope ring buffer.
 const SCOPE_HISTORY: usize = 400;
 
@@ -647,6 +644,7 @@ impl IngestView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::UNLABELED_IMPORT;
 
     const FIXTURE: &str = concat!(
         r#"{"sample_id":"b1","label":null,"sample_rate_hz":400.0,"channel_names":["x","y","z"],"waveform":[[3.0,4.0,0.0],[0.0,0.0,2.0]]}"#,

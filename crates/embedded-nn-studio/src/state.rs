@@ -14,6 +14,8 @@ use embedded_nn_compiler::quant::{
 use std::f32::consts::PI;
 use std::path::{Path, PathBuf};
 
+/// Label assigned to imported records that carry no label of their own.
+pub const UNLABELED_IMPORT: &str = "unlabeled_import";
 /// Number of output channels for the `TinyConv1D` temporal convolution frontend.
 const CONV1D_OUT_CHANNELS: usize = 4;
 /// Kernel width (in frames) for the `TinyConv1D` temporal convolution frontend.
@@ -1926,7 +1928,7 @@ impl StudioState {
             match records_res {
                 Ok(records) => {
                     for record in records {
-                        let label = record.label_or("unlabeled_import");
+                        let label = record.label_or(UNLABELED_IMPORT);
                         let class_idx = self.class_index_or_insert(&label);
                         let id = self.next_sample_id;
                         self.next_sample_id += 1;
@@ -2539,7 +2541,7 @@ mod tests {
         let csv_content = "ax,ay,az\n0.1,0.2,0.9\n0.15,0.25,0.85\n0.2,0.3,0.8\n";
         std::fs::write(&csv_path, csv_content).unwrap();
 
-        let res = state.import_dataset_paths(&[csv_path.clone()]);
+        let res = state.import_dataset_paths(std::slice::from_ref(&csv_path));
         assert_eq!(res.unwrap(), 1);
         assert_eq!(state.samples.len(), initial_len + 1);
 
@@ -2562,7 +2564,7 @@ mod tests {
         ]"#;
         std::fs::write(&json_path, json_content).unwrap();
 
-        let res = state.import_dataset_paths(&[json_path.clone()]);
+        let res = state.import_dataset_paths(std::slice::from_ref(&json_path));
         assert_eq!(res.unwrap(), 2);
         assert_eq!(state.samples.len(), initial_len + 2);
 
@@ -2577,7 +2579,7 @@ mod tests {
         let csv_content = "1.0,2.0,3.0\n4.0,5.0,6.0\n7.0,8.0,9.0\n";
         std::fs::write(&csv_path, csv_content).unwrap();
 
-        let res = state.import_dataset_paths(&[csv_path.clone()]);
+        let res = state.import_dataset_paths(std::slice::from_ref(&csv_path));
         assert_eq!(res.unwrap(), 1);
         assert_eq!(state.samples.len(), initial_len + 1);
 
@@ -2596,7 +2598,7 @@ mod tests {
         let tsv_content = "1.5,2.5,3.5\n4.5,5.5,6.5\n";
         std::fs::write(&tsv_path, tsv_content).unwrap();
 
-        let res = state.import_dataset_paths(&[tsv_path.clone()]);
+        let res = state.import_dataset_paths(std::slice::from_ref(&tsv_path));
         assert_eq!(res.unwrap(), 1);
         assert_eq!(state.samples.len(), initial_len + 1);
 
@@ -2611,7 +2613,7 @@ mod tests {
         let json_content = r#"{"sample_id":"s_one","label":"vibration_alert","sample_rate_hz":200.0,"channel_names":["mag"],"waveform":[[0.5],[-0.5],[1.2]]}"#;
         std::fs::write(&json_path, json_content).unwrap();
 
-        let res = state.import_dataset_paths(&[json_path.clone()]);
+        let res = state.import_dataset_paths(std::slice::from_ref(&json_path));
         assert_eq!(res.unwrap(), 1);
         assert_eq!(state.samples.len(), initial_len + 1);
 
@@ -2628,7 +2630,7 @@ mod tests {
         let empty_path = std::env::temp_dir().join("empty_dataset.csv");
         std::fs::write(&empty_path, "").unwrap();
 
-        let res = state.import_dataset_paths(&[empty_path.clone()]);
+        let res = state.import_dataset_paths(std::slice::from_ref(&empty_path));
         assert!(res.is_err());
 
         let _ = std::fs::remove_file(&empty_path);

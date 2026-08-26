@@ -197,13 +197,13 @@ impl eframe::App for EmbeddedNnStudioApp {
                             .to_ascii_lowercase();
                         if ext == "tflite" {
                             let _ = self.state.import_tflite_path(path);
-                        } else if ext == "jsonl" || ext == "ndjson" || ext == "csv" || ext == "tsv"
+                        } else if ext == "jsonl"
+                            || ext == "ndjson"
+                            || ext == "csv"
+                            || ext == "tsv"
+                            || (ext == "json" && self.state.import_json_path(path.clone()).is_err())
                         {
                             dataset_paths.push(path);
-                        } else if ext == "json" {
-                            if self.state.import_json_path(path.clone()).is_err() {
-                                dataset_paths.push(path);
-                            }
                         }
                     }
                     if !dataset_paths.is_empty() {
