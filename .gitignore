@@ -1,3 +1,5 @@
 /target
 **/target
 **/*.rs.bk
+examples/c99-baremetal/c99_baremetal_inference
+examples/c99-baremetal/build

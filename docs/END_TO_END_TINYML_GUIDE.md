@@ -258,3 +258,19 @@ To verify accuracy and profile latency on real target hardware:
    let elapsed_cycles = cortex_m::peripheral::DWT::cycle_count() - start_cycles;
    ```
 2. **HIL Telemetry:** Stream output logits and elapsed cycles back over USB to verify 100% bit-level agreement between host training predictions and MCU silicon execution.
+
+---
+
+## 8. Reference Examples Library
+
+Explore complete, runnable reference projects across hardware architectures and TinyML modalities:
+
+- **[Audio Keyword Spotting (KWS)](../examples/keyword-spotting)**: On-device Mel filterbank DSP extraction & 112 -> 32 -> 4 INT8 wake-word detection.
+- **[Industrial Vibration Anomaly Detection & Safety](../examples/vibration-anomaly)**: Autoencoder MSE reconstruction scoring, Mahalanobis baseline distance, and ISO 26262 Flash CRC32 & arena canary integrity.
+- **[6-DOF IMU Gesture Recognition](../examples/imu-gesture)**: Accelerometer/Gyroscope temporal windowing with compile-time `#[embedded_nn_model]` embedding.
+- **[Sub-Byte 4-Bit & Codebook LUT Quantization](../examples/subbyte-quantization)**: 50% Flash memory compression with packed 4-bit nibbles and nonlinear K-Means codebook tables.
+- **[Raspberry Pi Pico (RP2040) Deployment](../examples/rp2040-pico)**: Dual Cortex-M0+ bare-metal `#![no_std]` firmware with GPIO LED inference feedback.
+- **[C99 Bare-Metal Deployment](../examples/c99-baremetal)**: Standalone C99 header-only deployment with zero external runtime dependencies.
+- **[STM32WBA65 Wireless MCU](../examples/stm32wba65ri)**: Cortex-M33 DSP-accelerated gesture firmware with WinUSB HIL streaming and SD card logging.
+- **[QEMU LM3S6965 Semihosting](../examples/qemu-lm3s6965)**: Automated headless CI/CD semihosting tests running neural network inference in QEMU.
+

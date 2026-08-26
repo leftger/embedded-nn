@@ -1,0 +1,10 @@
+[package]
+name = "vibration-anomaly"
+version = "0.1.0"
+edition = "2021"
+authors = ["Gerzain Mata <leftger@gmail.com>"]
+description = "Industrial vibration anomaly detection with ISO 26262 safety integrity on embedded-nn"
+
+[dependencies]
+embedded-nn = { path = "../../crates/embedded-nn", default-features = false, features = ["libm"] }
+libm = { version = "0.2.11" }

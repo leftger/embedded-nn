@@ -1,0 +1,10 @@
+[package]
+name = "keyword-spotting"
+version = "0.1.0"
+edition = "2021"
+authors = ["Gerzain Mata <leftger@gmail.com>"]
+description = "Keyword spotting audio pipeline on embedded-nn"
+
+[dependencies]
+embedded-nn = { path = "../../crates/embedded-nn", default-features = false, features = ["dsp", "libm"] }
+libm = { version = "0.2.11" }

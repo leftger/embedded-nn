@@ -155,6 +155,24 @@ enn hil infer --input 64
 
 ---
 
+## Examples & Deployment Showcase
+
+`embedded-nn` includes a collection of end-to-end examples demonstrating deployment patterns across edge targets and sensory modalities:
+
+| Example | Target / Hardware | Modality & Capabilities | Runnable Command / Path |
+| :--- | :--- | :--- | :--- |
+| **Audio Keyword Spotting** | `#![no_std]` / Host | 16 kHz Audio -> Mel DSP Filterbank -> INT8 Conv/FC -> Softmax wake-word detection | `cargo run --package embedded-nn --example keyword_spotting --features="dsp,libm"`<br>[`examples/keyword-spotting`](examples/keyword-spotting) |
+| **Vibration Anomaly & Safety** | Industrial Microcontrollers | 3-axis vibration condition monitoring, Autoencoder MSE reconstruction scoring, Mahalanobis distance, ISO 26262 Flash CRC32 & arena canaries | `cargo run --package embedded-nn --example vibration_anomaly --features="libm"`<br>[`examples/vibration-anomaly`](examples/vibration-anomaly) |
+| **6-DOF IMU Gesture Recognition** | Wearable MCUs | Accelerometer + Gyroscope sliding window, `#[embedded_nn_model]` compile-time macro, zero-heap gesture decoding | `cargo run --package embedded-nn --example gesture_recognition --features="libm"`<br>[`examples/imu-gesture`](examples/imu-gesture) |
+| **Sub-Byte 4-Bit & Codebook LUT** | Ultra-Low Flash Silicon | Signed 4-bit (`s4`) nibble packing (50% Flash reduction) & 16-entry nonlinear codebook centroids | `cargo run --package embedded-nn --example subbyte_quantization`<br>[`examples/subbyte-quantization`](examples/subbyte-quantization) |
+| **Raspberry Pi Pico (RP2040)** | RP2040 (Dual Cortex-M0+) | Bare-metal `#![no_std]` firmware with `rp2040-hal`, static memory arena, on-board LED inference feedback | [`examples/rp2040-pico`](examples/rp2040-pico) |
+| **STM32WBA65RI Wireless MCU** | Cortex-M33 (DSP + FPU) | STM32WBA65 with Mel DSP, LR1110 accelerometer, WinUSB HIL streaming, SD card logger | [`examples/stm32wba65ri`](examples/stm32wba65ri) |
+| **C99 Bare-Metal Deployment** | STM32 / ESP32 / Keil / Zephyr | Pure C99 header-only deployment with zero external dependencies and zero heap allocations | [`examples/c99-baremetal`](examples/c99-baremetal) |
+| **QEMU Cortex-M3 Semihosting** | QEMU LM3S6965 | Automated semihosting CI/CD verification running quantized inference in emulation | [`examples/qemu-lm3s6965`](examples/qemu-lm3s6965) |
+| **PyTorch -> LiteRT Export** | Host Python / PyTorch | Exporting quantized PyTorch neural networks to LiteRT FlatBuffers for `embedded-nn` compilation | [`examples/litert_pytorch_export.py`](examples/litert_pytorch_export.py) |
+
+---
+
 ## License
 
 Dual-licensed under either of:

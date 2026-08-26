@@ -1,0 +1,15 @@
+[package]
+name = "rp2040-pico-inference"
+version = "0.1.0"
+edition = "2021"
+authors = ["Gerzain Mata <leftger@gmail.com>"]
+description = "Raspberry Pi Pico (RP2040 Cortex-M0+) zero-allocation neural network inference using embedded-nn"
+
+[dependencies]
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+rp2040-hal = "0.10"
+rp2040-boot2 = "0.3"
+panic-halt = "0.2"
+embedded-hal = "0.2.7"
+embedded-nn = { path = "../../crates/embedded-nn", default-features = false }

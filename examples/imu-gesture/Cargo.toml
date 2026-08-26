@@ -1,0 +1,11 @@
+[package]
+name = "imu-gesture"
+version = "0.1.0"
+edition = "2021"
+authors = ["Gerzain Mata <leftger@gmail.com>"]
+description = "6-DOF IMU gesture recognition on embedded-nn"
+
+[dependencies]
+embedded-nn = { path = "../../crates/embedded-nn", default-features = false, features = ["libm"] }
+embedded-nn-macros = { path = "../../crates/embedded-nn-macros" }
+libm = { version = "0.2.11" }

@@ -1,0 +1,44 @@
+{
+  "name": "GestureClassifier",
+  "tensors": [
+    {
+      "id": 0,
+      "name": "imu_window",
+      "shape": { "batches": 1, "height": 1, "width": 1, "channels": 16 },
+      "dtype": "Int8",
+      "quant": { "multiplier": 1073741824, "shift": 0, "zero_point": 0, "scale": 0.03125 }
+    },
+    {
+      "id": 1,
+      "name": "logits",
+      "shape": { "batches": 1, "height": 1, "width": 1, "channels": 4 },
+      "dtype": "Int8",
+      "quant": { "multiplier": 1073741824, "shift": 0, "zero_point": 0, "scale": 0.03125 }
+    }
+  ],
+  "layers": [
+    {
+      "id": 0,
+      "name": "fc_layer",
+      "inputs": [0],
+      "outputs": [1],
+      "op": {
+        "FullyConnected": {
+          "weights": [
+            3, -2, 4, 1, -1, 5, -3, 2, 4, -2, 1, 5, -3, 2, 5, -1,
+            -4, 2, 1, 3, -5, 4, -2, 1, 2, -1, 3, -4, 5, 2, -3, 1,
+            1, 4, -2, 3, -2, 5, 3, -4, 4, -1, 2, 5, -3, 4, 1, -2,
+            -1, 3, -5, 2, 4, -1, 3, 5, 2, -4, 3, 1, -5, 4, -2, 1
+          ],
+          "packed_s4": null,
+          "bias": [0, 5, -2, 8],
+          "filter_offset": 0,
+          "activation": "None",
+          "per_channel_quant": null
+        }
+      }
+    }
+  ],
+  "inputs": [0],
+  "outputs": [1]
+}

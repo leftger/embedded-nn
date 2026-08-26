@@ -1,0 +1,9 @@
+[package]
+name = "subbyte-quantization"
+version = "0.1.0"
+edition = "2021"
+authors = ["Gerzain Mata <leftger@gmail.com>"]
+description = "Sub-byte 4-bit and Codebook LUT quantization on embedded-nn"
+
+[dependencies]
+embedded-nn = { path = "../../crates/embedded-nn", default-features = false }

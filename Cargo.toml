@@ -15,6 +15,11 @@ members = [
 exclude = [
     "examples/qemu-lm3s6965",
     "examples/stm32wba65ri",
+    "examples/rp2040-pico",
+    "examples/keyword-spotting",
+    "examples/vibration-anomaly",
+    "examples/imu-gesture",
+    "examples/subbyte-quantization",
 ]
 
 [workspace.package]
