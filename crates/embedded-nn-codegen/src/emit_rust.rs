@@ -309,7 +309,7 @@ impl RustCodeGenerator {
         if has_per_channel_fc {
             out.push_str("    fully_connected_per_channel_s8,\n");
         }
-        if has_conv2d {
+        if has_conv1d || has_conv2d {
             out.push_str("    ConvParams,\n");
         }
         if has_conv2d_s4 {

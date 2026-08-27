@@ -71,6 +71,33 @@ impl eframe::App for EmbeddedNnStudioApp {
                     "Model source: {}",
                     self.state.model_source.display_name()
                 ));
+                if ui.button("💾 Save Project (.ennproj)").clicked() {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_file_name("project.ennproj")
+                        .add_filter("embedded-nn Studio Project", &["ennproj", "json"])
+                        .save_file()
+                    {
+                        let msg = self.state.save_project_file(&path);
+                        self.ingest_view.import_status = match msg {
+                            Ok(s) => s,
+                            Err(e) => format!("Save error: {e}"),
+                        };
+                    }
+                }
+                if ui.button("📂 Open Project (.ennproj)").clicked() {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("embedded-nn Studio Project", &["ennproj", "json"])
+                        .pick_file()
+                    {
+                        let msg = self.state.load_project_file(&path);
+                        self.ingest_view.import_status = match msg {
+                            Ok(s) => s,
+                            Err(e) => format!("Load error: {e}"),
+                        };
+                    }
+                }
                 if ui
                     .button("⚡ Showcase End-to-End Gesture Pipeline")
                     .clicked()

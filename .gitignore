@@ -3,3 +3,10 @@
 **/*.rs.bk
 examples/c99-baremetal/c99_baremetal_inference
 examples/c99-baremetal/build
+
+# User model exports and IP protection
+model.rs
+**/model.rs
+!examples/stm32wba65ri/src/model.rs
+**/model_source.rs
+**/models/model.rs

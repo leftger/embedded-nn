@@ -21,6 +21,8 @@ pub struct CodegenView {
     pub copy_status: Option<String>,
     pub selected_test_sample_idx: usize,
     pub selected_lang: CodegenLanguage,
+    pub pending_infer: bool,
+    pub last_infer_seq: u32,
 }
 
 impl CodegenView {
@@ -29,6 +31,8 @@ impl CodegenView {
             copy_status: None,
             selected_test_sample_idx: 0,
             selected_lang: CodegenLanguage::Rust,
+            pending_infer: false,
+            last_infer_seq: 0,
         }
     }
 
@@ -39,20 +43,24 @@ impl CodegenView {
         device_link: Option<&DeviceLink>,
     ) {
         if let Some(link) = device_link {
-            match link.take_result() {
-                Some(OwnedMsg::InferenceResult {
-                    execution_cycles,
-                    logits,
-                    ..
-                }) => {
-                    state.apply_device_inference(execution_cycles, &logits);
-                }
-                Some(OwnedMsg::Pong) | None => {}
-                Some(other) => {
-                    state.golden_status = Some(format!("Device message: {other:?}"));
+            while let Some(msg) = link.take_result() {
+                match msg {
+                    OwnedMsg::InferenceResult {
+                        execution_cycles,
+                        logits,
+                        ..
+                    } => {
+                        self.pending_infer = false;
+                        state.apply_device_inference(execution_cycles, &logits);
+                    }
+                    OwnedMsg::Pong => {}
+                    other => {
+                        state.golden_status = Some(format!("Device message: {other:?}"));
+                    }
                 }
             }
             if let Some(error) = link.take_error() {
+                self.pending_infer = false;
                 state.golden_status = Some(format!("HIL: {error}"));
             }
         }
@@ -272,17 +280,24 @@ impl CodegenView {
                         }
                         let device_ready = device_link.is_some_and(|link| link.is_handshaked());
                         if ui
-                            .add_enabled(device_ready, egui::Button::new("Run on device"))
+                            .add_enabled(
+                                device_ready && !self.pending_infer,
+                                egui::Button::new("Run on device"),
+                            )
                             .clicked()
                         {
                             state.run_test_inference();
+                            state.last_device_cycles = None;
+                            state.last_device_logits.clear();
+                            self.pending_infer = true;
+                            self.last_infer_seq = self.last_infer_seq.wrapping_add(1);
                             if let Some(link) = device_link {
                                 let input: Vec<u8> = state
                                     .test_input_vector
                                     .iter()
                                     .map(|&value| value as u8)
                                     .collect();
-                                link.infer(1, 0, input);
+                                link.infer(self.last_infer_seq, 0, input);
                             }
                         }
                     });
@@ -320,6 +335,9 @@ impl CodegenView {
                                 num_mel_bins,
                                 sample,
                             );
+                            state.last_device_cycles = None;
+                            state.last_device_logits.clear();
+                            self.pending_infer = false;
                             state.run_test_inference();
                         }
                     });
@@ -363,9 +381,47 @@ impl CodegenView {
                     });
                 }
 
-                if let Some(cycles) = state.last_device_cycles {
+                if self.pending_infer {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.colored_label(
+                            egui::Color32::from_rgb(100, 180, 255),
+                            "⚡ Executing inference on STM32WBA65...",
+                        );
+                    });
+                } else if let Some(cycles) = state.last_device_cycles {
+                    ui.add_space(4.0);
+                    if !state.last_device_logits.is_empty() {
+                        let mut dev_best_idx = 0;
+                        let mut dev_best_val = i8::MIN;
+                        for (i, &val) in state.last_device_logits.iter().enumerate() {
+                            if val > dev_best_val {
+                                dev_best_val = val;
+                                dev_best_idx = i;
+                            }
+                        }
+                        let dev_class_name = state
+                            .classes
+                            .get(dev_best_idx)
+                            .map(|s| s.as_str())
+                            .unwrap_or("unknown");
+
+                        ui.horizontal(|ui| {
+                            ui.label("🎯 Device Prediction:");
+                            ui.colored_label(
+                                egui::Color32::from_rgb(80, 220, 120),
+                                format!(
+                                    "\"{}\" (Class #{dev_best_idx}, score: {dev_best_val})",
+                                    dev_class_name
+                                ),
+                            );
+                        });
+                    }
+
                     ui.label(format!(
-                        "Device: {cycles} DWT cycles, logits {:?}",
+                        "Device: {cycles} DWT cycles (~{:.2} ms @ 96MHz), logits {:?}",
+                        cycles as f32 / 96000.0,
                         state.last_device_logits
                     ));
                     if !state.last_device_logits.is_empty()
@@ -373,7 +429,7 @@ impl CodegenView {
                     {
                         ui.colored_label(
                             egui::Color32::from_rgb(80, 220, 120),
-                            "Device logits match host interpreter.",
+                            "✔ Device logits bit-exact match with host interpreter.",
                         );
                     }
                 }
@@ -395,6 +451,9 @@ impl CodegenView {
                             });
                         }
                         if changed {
+                            state.last_device_cycles = None;
+                            state.last_device_logits.clear();
+                            self.pending_infer = false;
                             state.run_test_inference();
                         }
                     });

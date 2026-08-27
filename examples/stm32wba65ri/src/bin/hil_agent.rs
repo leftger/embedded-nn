@@ -257,8 +257,8 @@ async fn main(spawner: Spawner) {
     let dec = DEC.init(Decoder::new());
     let mut packet = [0u8; USB_MPS as usize];
     let mut encode_buf = [0u8; DEC_CAP + embedded_nn_live::FRAME_OVERHEAD];
-    let mut logits = [0u8; 64];
-    let mut input = [0i8; 64];
+    let mut logits = [0u8; model::ActiveModel::OUTPUT_DIM];
+    let mut input = [0i8; model::ActiveModel::INPUT_DIM];
     let mut fifo_frames = [[0u8; 6]; FIFO_CAPACITY as usize];
 
     loop {
@@ -327,13 +327,13 @@ async fn main(spawner: Spawner) {
                                         seq,
                                         code: NackCode::ModelMismatch as u16,
                                     })
-                                } else if raw.len() != model::SineFc::INPUT_DIM {
+                                } else if raw.len() != model::ActiveModel::INPUT_DIM {
                                     Some(Msg::Nack {
                                         seq,
                                         code: NackCode::BadInputLen as u16,
                                     })
                                 } else if raw.len() > input.len()
-                                    || model::SineFc::OUTPUT_DIM > logits.len()
+                                    || model::ActiveModel::OUTPUT_DIM > logits.len()
                                 {
                                     Some(Msg::Nack {
                                         seq,
@@ -343,10 +343,10 @@ async fn main(spawner: Spawner) {
                                     for (dst, src) in input.iter_mut().zip(raw.iter()) {
                                         *dst = *src as i8;
                                     }
-                                    let mut arena = [0u8; model::SineFc::ARENA_SIZE];
+                                    let mut arena = [0u8; model::ActiveModel::ARENA_SIZE];
                                     let started = cortex_m::peripheral::DWT::cycle_count();
-                                    match model::SineFc::predict(
-                                        &input[..model::SineFc::INPUT_DIM],
+                                    match model::ActiveModel::predict(
+                                        &input[..model::ActiveModel::INPUT_DIM],
                                         &mut arena,
                                     ) {
                                         Ok(output) => {
@@ -355,6 +355,21 @@ async fn main(spawner: Spawner) {
                                             for (dst, src) in logits.iter_mut().zip(output.iter()) {
                                                 *dst = *src as u8;
                                             }
+                                            let mut best_idx = 0;
+                                            let mut best_val = i8::MIN;
+                                            for (i, &val) in output.iter().enumerate() {
+                                                if val > best_val {
+                                                    best_val = val;
+                                                    best_idx = i;
+                                                }
+                                            }
+                                            defmt::info!(
+                                                "hil_agent: inferred class {} (score {}) in {} CPU cycles ({} us)",
+                                                best_idx,
+                                                best_val,
+                                                cycles,
+                                                cycles_to_us(cycles)
+                                            );
                                             Some(Msg::InferenceResult {
                                                 seq,
                                                 model_id,

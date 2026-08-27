@@ -17,6 +17,22 @@ pub fn calculate_symmetric_quant_s8(abs_max: f32) -> QuantParams {
     }
 }
 
+/// Calculate symmetric s4 (4-bit signed [-8..7]) quantization parameters from float min/max
+pub fn calculate_symmetric_quant_s4(abs_max: f32) -> QuantParams {
+    let scale = if abs_max > 1e-7 {
+        abs_max / 7.0
+    } else {
+        1.0 / 7.0
+    };
+    let (multiplier, shift) = quantize_multiplier(scale);
+    QuantParams {
+        multiplier,
+        shift,
+        zero_point: 0,
+        scale,
+    }
+}
+
 /// Calculate asymmetric int8 quantization parameters (scale + zero-point) from a float
 /// activation range `[min, max]`, per the standard TFLite/CMSIS-NN convention. Unlike
 /// `calculate_symmetric_quant_s8` (used for weights, which are always kept symmetric here),

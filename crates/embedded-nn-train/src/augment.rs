@@ -7,7 +7,7 @@
 use std::vec::Vec;
 
 /// Configuration for sensor waveform and spectrogram augmentations.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AugmentConfig {
     /// Standard deviation of Gaussian noise added to raw sensor values (in g).
     pub noise_std_dev: f32,

@@ -704,30 +704,33 @@ pub fn handshake(
         input_len,
         output_len,
     })?;
-    match transport.receive()? {
-        ready @ OwnedMsg::Ready {
-            proto,
-            model_id: ready_model,
-            input_len: ready_in,
-            output_len: ready_out,
-            ..
-        } => {
-            if proto != PROTO_VERSION {
-                return Err(TransportError::Handshake("protocol version mismatch"));
+    loop {
+        match transport.receive()? {
+            ready @ OwnedMsg::Ready {
+                proto,
+                model_id: ready_model,
+                input_len: ready_in,
+                output_len: ready_out,
+                ..
+            } => {
+                if proto != PROTO_VERSION {
+                    return Err(TransportError::Handshake("protocol version mismatch"));
+                }
+                if model_id != 0 && ready_model != model_id {
+                    return Err(TransportError::Handshake("model_id mismatch"));
+                }
+                if input_len != 0 && ready_in != input_len {
+                    return Err(TransportError::Handshake("tensor length mismatch"));
+                }
+                if output_len != 0 && ready_out != output_len {
+                    return Err(TransportError::Handshake("tensor length mismatch"));
+                }
+                return Ok(ready);
             }
-            if model_id != 0 && ready_model != model_id {
-                return Err(TransportError::Handshake("model_id mismatch"));
-            }
-            if input_len != 0 && ready_in != input_len {
-                return Err(TransportError::Handshake("tensor length mismatch"));
-            }
-            if output_len != 0 && ready_out != output_len {
-                return Err(TransportError::Handshake("tensor length mismatch"));
-            }
-            Ok(ready)
+            OwnedMsg::SensorFrame { .. } => continue,
+            OwnedMsg::Nack { seq, code } => return Err(TransportError::Nack { seq, code }),
+            _ => return Err(TransportError::Handshake("expected Ready")),
         }
-        OwnedMsg::Nack { seq, code } => Err(TransportError::Nack { seq, code }),
-        _ => Err(TransportError::Handshake("expected Ready")),
     }
 }
 

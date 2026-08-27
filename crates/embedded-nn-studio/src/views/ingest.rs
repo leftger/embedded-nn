@@ -45,6 +45,7 @@ pub struct IngestView {
     pub live_channels: Vec<Vec<f32>>,
     pub live_time_counter: f32,
     pub import_status: String,
+    pub replace_on_import: bool,
     pub available_agents: Vec<String>,
     pub link_status: String,
 }
@@ -63,6 +64,7 @@ impl IngestView {
             live_channels: vec![(0..100).map(|i| ((i as f32) * 0.1).sin() * 0.7).collect()],
             live_time_counter: 0.0,
             import_status: String::new(),
+            replace_on_import: false,
             available_agents: Vec::new(),
             link_status: "Disconnected".into(),
         }
@@ -239,9 +241,14 @@ impl IngestView {
     }
 
     fn import_dataset_files(&mut self, state: &mut StudioState, paths: &[PathBuf]) {
-        match state.import_dataset_paths(paths) {
+        let replace = self.replace_on_import;
+        match state.import_dataset_paths_mode(paths, replace) {
             Ok(count) => {
-                self.import_status = format!("Imported {} sample(s).", count);
+                if replace {
+                    self.import_status = format!("Replaced dataset with {} sample(s).", count);
+                } else {
+                    self.import_status = format!("Imported {} sample(s).", count);
+                }
             }
             Err(e) => {
                 self.import_status = format!("Import error: {e}");
@@ -402,6 +409,8 @@ impl IngestView {
 
                 ui.separator();
 
+                ui.checkbox(&mut self.replace_on_import, "Replace on import");
+
                 if ui.button("📂 Import Dataset File(s)").clicked()
                     && let Some(paths) = rfd::FileDialog::new()
                         .add_filter(
@@ -411,6 +420,13 @@ impl IngestView {
                         .pick_files()
                 {
                     self.import_dataset_files(state, &paths);
+                }
+
+                if !state.samples.is_empty() {
+                    if ui.button("🗑 Clear Dataset").clicked() {
+                        state.clear_dataset();
+                        self.import_status = "Dataset cleared.".into();
+                    }
                 }
 
                 if ui.button("💾 Export Dataset (.jsonl)").clicked() {
@@ -888,5 +904,31 @@ mod tests {
         assert!(painted.contains("Burst Mode"));
         assert!(painted.contains("Record Sample [Space]"));
         assert!(painted.contains("Export Dataset"));
+    }
+
+    #[test]
+    fn test_import_with_replace_mode_clears_old_samples() {
+        let mut view = IngestView::new();
+        let mut state = StudioState::default();
+        let path = write_fixture("enn_ingest_import_replace.jsonl", FIXTURE);
+
+        // First import (append mode)
+        view.replace_on_import = false;
+        view.import_dataset_files(&mut state, std::slice::from_ref(&path));
+        let total = state.samples.len();
+        assert!(total >= 2);
+
+        // Second import (replace mode)
+        view.replace_on_import = true;
+        view.import_dataset_files(&mut state, std::slice::from_ref(&path));
+        assert_eq!(state.samples.len(), 2);
+        assert!(
+            view.import_status
+                .contains("Replaced dataset with 2 sample(s)")
+        );
+
+        // Clear dataset
+        state.clear_dataset();
+        assert_eq!(state.samples.len(), 0);
     }
 }

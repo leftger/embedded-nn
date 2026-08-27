@@ -9,7 +9,8 @@ use embedded_nn_compiler::interpreter::HostInterpreter;
 use embedded_nn_compiler::ir::*;
 use embedded_nn_compiler::quant::{
     calculate_asymmetric_quant_s8, calculate_output_requant_multiplier,
-    calculate_symmetric_quant_s8, quantize_and_pack_weights_s4, quantize_weights_s8,
+    calculate_symmetric_quant_s4, calculate_symmetric_quant_s8, quantize_and_pack_weights_s4,
+    quantize_weights_s8,
 };
 use std::f32::consts::PI;
 use std::path::{Path, PathBuf};
@@ -32,7 +33,7 @@ const INPUT_FEATURE_SCALE: f32 = 1.0 / 127.0;
 /// so its scale is a convention (matching `INPUT_FEATURE_SCALE`) rather than calibrated.
 const SVDF_STATE_SCALE: f32 = 1.0 / 127.0;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DatasetSample {
     pub id: usize,
     pub label: String,
@@ -49,14 +50,14 @@ pub struct DatasetSample {
     pub quantized_frames: Vec<Vec<i8>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum WindowFunction {
     Hann,
     Hamming,
     Rectangular,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DspConfig {
     /// FFT analysis window length in samples. Must be a power of two (embedded-dsp FFT constraint).
     pub window_size: usize,
@@ -132,14 +133,14 @@ impl Default for DspConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ModelArchitecture {
     DenseMLP,
     TinyConv1D,
     RecurrentSVDF,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum QuantizationMode {
     Int4SubByte,
     Int8FixedPoint,
@@ -177,7 +178,7 @@ pub enum ModelImportStatus {
     Error(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ModelConfig {
     pub arch: ModelArchitecture,
     pub hidden_units: usize,
@@ -193,7 +194,7 @@ impl Default for ModelConfig {
         Self {
             arch: ModelArchitecture::DenseMLP,
             hidden_units: 16,
-            quant_mode: QuantizationMode::Int4SubByte,
+            quant_mode: QuantizationMode::Int8FixedPoint,
             epochs: 50,
             learning_rate: 0.02,
             enable_augmentation: true,
@@ -888,7 +889,7 @@ impl StudioState {
                             frame[ic] * self.conv1d_weights[(oc * kernel_w + k) * num_inputs + ic];
                     }
                 }
-                conv_act[oc * out_width + ow] = sum.max(0.0).min(1.0);
+                conv_act[ow * out_channels + oc] = sum.max(0.0).min(1.0);
             }
         }
 
@@ -975,9 +976,9 @@ impl StudioState {
             // 5. Backward through Conv1D (standard 1D conv weight/bias gradients)
             for oc in 0..out_channels {
                 for ow in 0..out_width {
-                    let act = conv_act[oc * out_width + ow];
+                    let act = conv_act[ow * out_channels + oc];
                     if act > 0.0 && act < 1.0 {
-                        let d_act = d_conv_act[oc * out_width + ow];
+                        let d_act = d_conv_act[ow * out_channels + oc];
                         self.conv1d_bias[oc] -= lr * d_act;
                         for k in 0..kernel_w {
                             let frame = &frames[ow + k];
@@ -1335,13 +1336,14 @@ impl StudioState {
     /// Quantizes `weights` per the currently selected [`QuantizationMode`], returning (s8, s4)
     fn quantize_head_weights(&self, weights: &[f32]) -> (Vec<i8>, Option<Vec<i8>>, f32) {
         let max_w = weights.iter().map(|w| w.abs()).fold(0.1f32, f32::max);
-        let quant_p = calculate_symmetric_quant_s8(max_w);
         match self.model_config.quant_mode {
             QuantizationMode::Int4SubByte => {
+                let quant_p = calculate_symmetric_quant_s4(max_w);
                 let packed = quantize_and_pack_weights_s4(weights, quant_p.scale);
                 (Vec::new(), Some(packed), quant_p.scale)
             }
             _ => {
+                let quant_p = calculate_symmetric_quant_s8(max_w);
                 let s8 = quantize_weights_s8(weights, quant_p.scale);
                 (s8, None, quant_p.scale)
             }
@@ -1507,10 +1509,11 @@ impl StudioState {
                     .fold(0.1f32, f32::max);
                 let quant_pc = calculate_symmetric_quant_s8(max_wc);
                 let conv_s8 = quantize_weights_s8(&self.conv1d_weights, quant_pc.scale);
+                let conv_bias_scale = (INPUT_FEATURE_SCALE * quant_pc.scale).max(1e-12);
                 let conv_bias_s32: Vec<i32> = self
                     .conv1d_bias
                     .iter()
-                    .map(|&b| (b * 100.0) as i32)
+                    .map(|&b| (b / conv_bias_scale).round() as i32)
                     .collect();
 
                 let conv_output_quant = Self::calibrated_output_quant(
@@ -1553,8 +1556,12 @@ impl StudioState {
                 let quant_pt = calculate_symmetric_quant_s8(max_wt);
                 let svdf_time_s8 = quantize_weights_s8(&self.svdf_weights_time, quant_pt.scale);
 
-                let svdf_bias_s32: Vec<i32> =
-                    self.svdf_bias.iter().map(|&b| (b * 100.0) as i32).collect();
+                let svdf_bias_scale = (SVDF_STATE_SCALE * quant_pt.scale).max(1e-12);
+                let svdf_bias_s32: Vec<i32> = self
+                    .svdf_bias
+                    .iter()
+                    .map(|&b| (b / svdf_bias_scale).round() as i32)
+                    .collect();
 
                 // The SVDF kernel's internal delay-line state is an implementation-internal i8
                 // representation with no externally observed float range, so its scale is fixed
@@ -1598,7 +1605,12 @@ impl StudioState {
         // RecurrentSVDF skips FC1 (its "hidden layer" is the SVDF output itself).
         let pre_softmax_id = if self.model_config.arch == ModelArchitecture::RecurrentSVDF {
             let (fc2_s8, fc2_s4, weight2_scale) = self.quantize_head_weights(&self.weights_fc2);
-            let bias2_s32: Vec<i32> = self.bias_fc2.iter().map(|&b| (b * 100.0) as i32).collect();
+            let bias2_scale = (head_input_scale * weight2_scale).max(1e-12);
+            let bias2_s32: Vec<i32> = self
+                .bias_fc2
+                .iter()
+                .map(|&b| (b / bias2_scale).round() as i32)
+                .collect();
             let logits_quant = Self::calibrated_output_quant(
                 head_input_scale,
                 weight2_scale,
@@ -1620,7 +1632,12 @@ impl StudioState {
             let num_hidden = self.model_config.hidden_units;
 
             let (fc1_s8, fc1_s4, weight1_scale) = self.quantize_head_weights(&self.weights_fc1);
-            let bias1_s32: Vec<i32> = self.bias_fc1.iter().map(|&b| (b * 100.0) as i32).collect();
+            let bias1_scale = (head_input_scale * weight1_scale).max(1e-12);
+            let bias1_s32: Vec<i32> = self
+                .bias_fc1
+                .iter()
+                .map(|&b| (b / bias1_scale).round() as i32)
+                .collect();
             let fc1_output_quant = Self::calibrated_output_quant(
                 head_input_scale,
                 weight1_scale,
@@ -1641,7 +1658,12 @@ impl StudioState {
             );
 
             let (fc2_s8, fc2_s4, weight2_scale) = self.quantize_head_weights(&self.weights_fc2);
-            let bias2_s32: Vec<i32> = self.bias_fc2.iter().map(|&b| (b * 100.0) as i32).collect();
+            let bias2_scale = (fc1_scale * weight2_scale).max(1e-12);
+            let bias2_s32: Vec<i32> = self
+                .bias_fc2
+                .iter()
+                .map(|&b| (b / bias2_scale).round() as i32)
+                .collect();
             let logits_quant = Self::calibrated_output_quant(
                 fc1_scale,
                 weight2_scale,
@@ -1888,6 +1910,25 @@ impl StudioState {
         ))
     }
 
+    pub fn clear_dataset(&mut self) {
+        self.samples.clear();
+        self.next_sample_id = 1;
+        self.reset_training();
+        self.recompute_all_frames();
+        self.rebuild_model_graph_and_codegen();
+    }
+
+    pub fn import_dataset_paths_mode(
+        &mut self,
+        paths: &[PathBuf],
+        replace: bool,
+    ) -> Result<usize, String> {
+        if replace {
+            self.clear_dataset();
+        }
+        self.import_dataset_paths(paths)
+    }
+
     pub fn import_dataset_paths(&mut self, paths: &[PathBuf]) -> Result<usize, String> {
         let mut imported = 0usize;
         let mut errors: Vec<String> = Vec::new();
@@ -2075,6 +2116,106 @@ impl StudioState {
         self.last_device_cycles = Some(cycles);
         self.last_device_logits = logits.iter().map(|&value| value as i8).collect();
     }
+
+    pub const PROJECT_VERSION: u32 = 1;
+
+    pub fn to_project(&self) -> StudioProject {
+        StudioProject {
+            version: Self::PROJECT_VERSION,
+            dsp: self.dsp.clone(),
+            model_config: self.model_config.clone(),
+            classes: self.classes.clone(),
+            samples: self.samples.clone(),
+            next_sample_id: self.next_sample_id,
+            current_epoch: self.current_epoch,
+            train_loss_history: self.train_loss_history.clone(),
+            val_acc_history: self.val_acc_history.clone(),
+            confusion_matrix: self.confusion_matrix.clone(),
+            weights_fc1: self.weights_fc1.clone(),
+            bias_fc1: self.bias_fc1.clone(),
+            weights_fc2: self.weights_fc2.clone(),
+            bias_fc2: self.bias_fc2.clone(),
+            conv1d_weights: self.conv1d_weights.clone(),
+            conv1d_bias: self.conv1d_bias.clone(),
+            svdf_weights_feature: self.svdf_weights_feature.clone(),
+            svdf_weights_time: self.svdf_weights_time.clone(),
+            svdf_bias: self.svdf_bias.clone(),
+            test_input_vector: self.test_input_vector.clone(),
+        }
+    }
+
+    pub fn apply_project(&mut self, proj: StudioProject) {
+        self.dsp = proj.dsp;
+        self.model_config = proj.model_config;
+        self.classes = proj.classes;
+        self.samples = proj.samples;
+        self.next_sample_id = proj.next_sample_id;
+        self.current_epoch = proj.current_epoch;
+        self.train_loss_history = proj.train_loss_history;
+        self.val_acc_history = proj.val_acc_history;
+        self.confusion_matrix = proj.confusion_matrix;
+        self.weights_fc1 = proj.weights_fc1;
+        self.bias_fc1 = proj.bias_fc1;
+        self.weights_fc2 = proj.weights_fc2;
+        self.bias_fc2 = proj.bias_fc2;
+        self.conv1d_weights = proj.conv1d_weights;
+        self.conv1d_bias = proj.conv1d_bias;
+        self.svdf_weights_feature = proj.svdf_weights_feature;
+        self.svdf_weights_time = proj.svdf_weights_time;
+        self.svdf_bias = proj.svdf_bias;
+        self.test_input_vector = proj.test_input_vector;
+        self.recompute_all_frames();
+        self.rebuild_model_graph_and_codegen();
+        self.run_test_inference();
+    }
+
+    pub fn save_project_file(&self, path: &Path) -> Result<String, String> {
+        let proj = self.to_project();
+        let json = serde_json::to_string_pretty(&proj)
+            .map_err(|e| format!("Failed to serialize project: {e}"))?;
+        std::fs::write(path, json)
+            .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
+        Ok(format!("Saved project to {}", path.display()))
+    }
+
+    pub fn load_project_file(&mut self, path: &Path) -> Result<String, String> {
+        let contents = std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+        let proj: StudioProject = serde_json::from_str(&contents)
+            .map_err(|e| format!("Invalid project file {}: {e}", path.display()))?;
+        let sample_count = proj.samples.len();
+        self.apply_project(proj);
+        Ok(format!(
+            "Loaded project from {} ({} samples, epoch {})",
+            path.display(),
+            sample_count,
+            self.current_epoch
+        ))
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StudioProject {
+    pub version: u32,
+    pub dsp: DspConfig,
+    pub model_config: ModelConfig,
+    pub classes: Vec<String>,
+    pub samples: Vec<DatasetSample>,
+    pub next_sample_id: usize,
+    pub current_epoch: usize,
+    pub train_loss_history: Vec<f32>,
+    pub val_acc_history: Vec<f32>,
+    pub confusion_matrix: Vec<Vec<usize>>,
+    pub weights_fc1: Vec<f32>,
+    pub bias_fc1: Vec<f32>,
+    pub weights_fc2: Vec<f32>,
+    pub bias_fc2: Vec<f32>,
+    pub conv1d_weights: Vec<f32>,
+    pub conv1d_bias: Vec<f32>,
+    pub svdf_weights_feature: Vec<f32>,
+    pub svdf_weights_time: Vec<f32>,
+    pub svdf_bias: Vec<f32>,
+    pub test_input_vector: Vec<i8>,
 }
 
 fn parse_json_dataset(contents: &str) -> Result<Vec<embedded_nn_live::DatasetRecord>, String> {
@@ -2657,5 +2798,35 @@ mod tests {
 
         let _ = std::fs::remove_file(&csv_path);
         let _ = std::fs::remove_file(&jsonl_path);
+    }
+
+    #[test]
+    fn test_project_save_and_load_roundtrip() {
+        let mut state = StudioState::default();
+        state.model_config.epochs = 75;
+        state.model_config.learning_rate = 0.05;
+        state.classes = vec![
+            "idle".into(),
+            "wave_left".into(),
+            "wave_right".into(),
+            "shake".into(),
+        ];
+
+        let project_path = std::env::temp_dir().join("test_roundtrip.ennproj");
+        let save_res = state.save_project_file(&project_path);
+        assert!(save_res.is_ok());
+
+        let mut restored = StudioState::default();
+        restored.clear_dataset();
+        let load_res = restored.load_project_file(&project_path);
+        assert!(load_res.is_ok());
+
+        assert_eq!(restored.model_config.epochs, 75);
+        assert_eq!(restored.model_config.learning_rate, 0.05);
+        assert_eq!(restored.classes.len(), 4);
+        assert_eq!(restored.samples.len(), state.samples.len());
+        assert!(!restored.generated_rust_code.is_empty());
+
+        let _ = std::fs::remove_file(&project_path);
     }
 }
