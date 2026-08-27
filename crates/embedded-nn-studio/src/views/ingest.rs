@@ -201,17 +201,20 @@ impl IngestView {
         if link.is_handshaked() {
             self.link_status = format!("Ready {}", link.device_id());
         }
-        if let Some(OwnedMsg::SensorFrame {
-            timestamp_ms,
-            channel_count,
-            values,
-        }) = link.take_sensor()
-        {
-            let mut samples = vec![0.0f32; values.len() / 4];
-            if let Ok(n) = decode_f32_le(&values, &mut samples) {
-                // `values` is channel-interleaved (x,y,z,x,y,z,...).
-                self.push_sensor_samples(&samples[..n], usize::from(channel_count));
-                self.link_status = format!("t={timestamp_ms} ms ch={channel_count} samples={n}");
+        for frame in link.drain_sensors() {
+            if let OwnedMsg::SensorFrame {
+                timestamp_ms,
+                channel_count,
+                values,
+            } = frame
+            {
+                let mut samples = vec![0.0f32; values.len() / 4];
+                if let Ok(n) = decode_f32_le(&values, &mut samples) {
+                    // `values` is channel-interleaved (x,y,z,x,y,z,...).
+                    self.push_sensor_samples(&samples[..n], usize::from(channel_count));
+                    self.link_status =
+                        format!("t={timestamp_ms} ms ch={channel_count} samples={n}");
+                }
             }
         }
         if let Some(error) = link.take_error() {
@@ -599,7 +602,7 @@ impl IngestView {
 
                             let mut delete_id = None;
                             let mut relabel = None;
-                            for sample in state.samples.iter().rev().take(30) {
+                            for sample in state.samples.iter().rev() {
                                 ui.label(format!("#{:03}", sample.id));
 
                                 ui.push_id(sample.id, |ui| {

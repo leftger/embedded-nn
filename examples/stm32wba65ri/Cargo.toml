@@ -17,6 +17,10 @@ required-features = ["hil-usb"]
 name = "data_collector"
 path = "src/bin/data_collector.rs"
 
+[[bin]]
+name = "tft_gesture_demo"
+path = "src/bin/tft_gesture_demo.rs"
+
 [features]
 default = []
 hil-usb = ["dep:embassy-usb", "dep:embedded-nn-live"]
@@ -41,6 +45,11 @@ embedded-nn-macros = { path = "../../crates/embedded-nn-macros" }
 lis2de12 = { version = "0.4", default-features = false, features = ["async"] }
 panic-probe = { version = "0.3.2", features = ["print-defmt"] }
 static_cell = "2"
+embedded-graphics = "0.8"
+embedded-hal-bus = "0.3"
+display-interface = "0.5"
+display-interface-spi = "0.5"
+mipidsi = "0.9"
 
 [profile.dev]
 panic = "abort"

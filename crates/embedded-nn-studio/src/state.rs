@@ -798,8 +798,8 @@ impl StudioState {
             for i in 0..num_inputs {
                 sum += x[i] * self.weights_fc1[h * num_inputs + i];
             }
-            // Demo trainer's bounded ReLU.
-            hidden[h] = sum.max(0.0).min(1.0);
+            // ReLU activation matching hardware kernel
+            hidden[h] = sum.max(0.0);
         }
 
         let mut logits = vec![0.0f32; num_classes];
@@ -854,7 +854,7 @@ impl StudioState {
             }
 
             for h in 0..num_hidden {
-                if hidden[h] > 0.0 && hidden[h] < 1.0 {
+                if hidden[h] > 0.0 {
                     let d_h = d_hidden[h];
                     self.bias_fc1[h] -= lr * d_h;
                     for i in 0..num_inputs {
@@ -889,7 +889,7 @@ impl StudioState {
                             frame[ic] * self.conv1d_weights[(oc * kernel_w + k) * num_inputs + ic];
                     }
                 }
-                conv_act[ow * out_channels + oc] = sum.max(0.0).min(1.0);
+                conv_act[ow * out_channels + oc] = sum.max(0.0);
             }
         }
 
@@ -899,7 +899,7 @@ impl StudioState {
             for i in 0..conv_out_len {
                 sum += conv_act[i] * self.weights_fc1[h * conv_out_len + i];
             }
-            hidden[h] = sum.max(0.0).min(1.0);
+            hidden[h] = sum.max(0.0);
         }
 
         let mut logits = vec![0.0f32; num_classes];
@@ -963,7 +963,7 @@ impl StudioState {
 
             let mut d_conv_act = vec![0.0f32; conv_out_len];
             for h in 0..num_hidden {
-                if hidden[h] > 0.0 && hidden[h] < 1.0 {
+                if hidden[h] > 0.0 {
                     let d_h = d_hidden[h];
                     self.bias_fc1[h] -= lr * d_h;
                     for i in 0..conv_out_len {
@@ -977,7 +977,7 @@ impl StudioState {
             for oc in 0..out_channels {
                 for ow in 0..out_width {
                     let act = conv_act[ow * out_channels + oc];
-                    if act > 0.0 && act < 1.0 {
+                    if act > 0.0 {
                         let d_act = d_conv_act[ow * out_channels + oc];
                         self.conv1d_bias[oc] -= lr * d_act;
                         for k in 0..kernel_w {
@@ -1387,15 +1387,20 @@ impl StudioState {
 
     /// Real activation-range calibration for asymmetric output quantization: scans the full
     /// sample set through the current architecture's forward math (no gradient) and returns the
-    /// (min, max) float range of the final pre-softmax logits, and -- for RecurrentSVDF only --
-    /// the SVDF layer's raw output. Both are unclamped, unlike the ReLU-clamped hidden/conv
-    /// layers, which use the demo trainer's fixed `[0, 1]` range and don't need scanning.
-    fn calibrate_activation_ranges(&self) -> ((f32, f32), Option<(f32, f32)>) {
+    /// Real activation-range calibration for asymmetric output quantization: scans the full
+    /// sample set through the current architecture's forward math and returns the true (min, max)
+    /// float range of the pre-softmax logits, hidden layer activations, Conv1D activations,
+    /// and SVDF layer outputs.
+    fn calibrate_activation_ranges(
+        &self,
+    ) -> ((f32, f32), (f32, f32), (f32, f32), Option<(f32, f32)>) {
         let num_inputs = self.dsp.num_mel_bins;
         let expected_frames = Self::num_frames_for_config(&self.dsp);
 
         let mut logits_lo = f32::INFINITY;
         let mut logits_hi = f32::NEG_INFINITY;
+        let mut hidden_hi = 0.0f32;
+        let mut conv_hi = 0.0f32;
         let mut svdf_lo = f32::INFINITY;
         let mut svdf_hi = f32::NEG_INFINITY;
 
@@ -1403,21 +1408,28 @@ impl StudioState {
             if sample.frames.len() != expected_frames {
                 continue;
             }
-            let logits = match self.model_config.arch {
+            let (conv_act, hidden_act, logits) = match self.model_config.arch {
                 ModelArchitecture::DenseMLP => {
                     let x = Self::mean_pool_frames(&sample.frames, num_inputs);
-                    self.forward_dense(&x).1
+                    let (h, l) = self.forward_dense(&x);
+                    (Vec::new(), h, l)
                 }
-                ModelArchitecture::TinyConv1D => self.forward_conv1d(&sample.frames).2,
+                ModelArchitecture::TinyConv1D => self.forward_conv1d(&sample.frames),
                 ModelArchitecture::RecurrentSVDF => {
                     let (_, _, svdf_out, logits) = self.forward_svdf(&sample.frames);
                     for &v in &svdf_out {
                         svdf_lo = svdf_lo.min(v);
                         svdf_hi = svdf_hi.max(v);
                     }
-                    logits
+                    (Vec::new(), svdf_out, logits)
                 }
             };
+            for &c in &conv_act {
+                conv_hi = conv_hi.max(c);
+            }
+            for &h in &hidden_act {
+                hidden_hi = hidden_hi.max(h);
+            }
             for &l in &logits {
                 logits_lo = logits_lo.min(l);
                 logits_hi = logits_hi.max(l);
@@ -1429,6 +1441,8 @@ impl StudioState {
         } else {
             (-1.0, 1.0)
         };
+        let hidden_range = (0.0f32, hidden_hi.max(0.1));
+        let conv_range = (0.0f32, conv_hi.max(0.1));
         let svdf_range = if self.model_config.arch == ModelArchitecture::RecurrentSVDF {
             Some(if svdf_lo.is_finite() && svdf_hi > svdf_lo {
                 (svdf_lo, svdf_hi)
@@ -1439,7 +1453,7 @@ impl StudioState {
             None
         };
 
-        (logits_range, svdf_range)
+        (logits_range, hidden_range, conv_range, svdf_range)
     }
 
     /// Rebuilds the formal ModelGraph, schedules the static memory arena, and emits Rust code
@@ -1467,10 +1481,9 @@ impl StudioState {
 
         // Real activation-range calibration (asymmetric quantization): scans the dataset through
         // the current architecture's forward math to find the true float range of unclamped
-        // layers (logits, and the SVDF output), rather than the fake QuantParams::default()
-        // placeholder used before. ReLU-clamped layers use the fixed [0, 1] demo range directly.
-        let (logits_range, svdf_range) = self.calibrate_activation_ranges();
-        let hidden_range = (0.0f32, 1.0f32);
+        // layers and ReLU activations.
+        let (logits_range, hidden_range, conv_range, svdf_range) =
+            self.calibrate_activation_ranges();
 
         let mut builder = ModelBuilder::new("GestureNeuralNet");
 
@@ -1519,8 +1532,8 @@ impl StudioState {
                 let conv_output_quant = Self::calibrated_output_quant(
                     INPUT_FEATURE_SCALE,
                     quant_pc.scale,
-                    hidden_range.0,
-                    hidden_range.1,
+                    conv_range.0,
+                    conv_range.1,
                 );
                 let conv_scale = conv_output_quant.scale;
 
@@ -2474,9 +2487,12 @@ mod tests {
     #[test]
     fn test_calibrate_activation_ranges_is_finite_and_sane() {
         let state = StudioState::default();
-        let (logits_range, svdf_range) = state.calibrate_activation_ranges();
+        let (logits_range, hidden_range, conv_range, svdf_range) =
+            state.calibrate_activation_ranges();
         assert!(logits_range.0.is_finite() && logits_range.1.is_finite());
         assert!(logits_range.1 > logits_range.0);
+        assert!(hidden_range.1 >= hidden_range.0);
+        assert!(conv_range.1 >= conv_range.0);
         assert!(svdf_range.is_none()); // default arch is DenseMLP
     }
 

@@ -177,7 +177,7 @@ impl DspView {
                         state.samples[self.selected_sample_idx].label
                     ))
                     .show_ui(ui, |ui| {
-                        for (idx, s) in state.samples.iter().enumerate().take(30) {
+                        for (idx, s) in state.samples.iter().enumerate() {
                             ui.selectable_value(
                                 &mut self.selected_sample_idx,
                                 idx,

@@ -815,7 +815,7 @@ struct LinkState {
     alive: bool,
     error: Option<String>,
     ready: Option<OwnedMsg>,
-    latest_sensor: Option<OwnedMsg>,
+    sensor_queue: VecDeque<OwnedMsg>,
     last_result: Option<OwnedMsg>,
 }
 
@@ -881,12 +881,21 @@ impl DeviceLink {
             .and_then(|mut s| s.error.take())
     }
 
+    pub fn drain_sensors(&self) -> Vec<OwnedMsg> {
+        self.shared
+            .state
+            .lock()
+            .ok()
+            .map(|mut s| s.sensor_queue.drain(..).collect())
+            .unwrap_or_default()
+    }
+
     pub fn take_sensor(&self) -> Option<OwnedMsg> {
         self.shared
             .state
             .lock()
             .ok()
-            .and_then(|mut s| s.latest_sensor.take())
+            .and_then(|mut s| s.sensor_queue.pop_front())
     }
 
     pub fn take_result(&self) -> Option<OwnedMsg> {
@@ -935,7 +944,10 @@ fn apply_inbound(shared: &Shared, msg: OwnedMsg) {
                 state.ready = Some(ready);
             }
             sensor @ OwnedMsg::SensorFrame { .. } => {
-                state.latest_sensor = Some(sensor);
+                state.sensor_queue.push_back(sensor);
+                if state.sensor_queue.len() > 1024 {
+                    state.sensor_queue.pop_front();
+                }
             }
             result @ OwnedMsg::InferenceResult { .. } => {
                 state.last_result = Some(result);

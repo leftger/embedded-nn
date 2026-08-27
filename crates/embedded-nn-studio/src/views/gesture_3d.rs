@@ -123,7 +123,7 @@ impl Gesture3DView {
                             None => "None".into(),
                         })
                         .show_ui(ui, |ui| {
-                            for (idx, s) in state.samples.iter().enumerate().take(50) {
+                            for (idx, s) in state.samples.iter().enumerate() {
                                 let has_xyz = if s.trajectory.is_empty() { "" } else { " ▪" };
                                 ui.selectable_value(
                                     &mut self.selected_sample_idx,

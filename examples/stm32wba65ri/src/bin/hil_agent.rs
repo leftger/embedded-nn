@@ -51,7 +51,7 @@ const LIS2DE12_ADDR_ALT: u8 = 0x19;
 /// How often to sample and push a `Msg::SensorFrame` while idle (no host
 /// request pending). Bounds the USB-HS bulk read wait, not the sensor's own
 /// ODR, so it also caps how stale a burst of queued host requests can get.
-const SENSOR_PERIOD: Duration = Duration::from_hz(50);
+const SENSOR_PERIOD: Duration = Duration::from_hz(100);
 
 /// LIS2DE12 sensitivity at the configured ±2 g range.
 const G_PER_LSB: f32 = 0.0156;
@@ -282,16 +282,18 @@ async fn main(spawner: Spawner) {
                         && let Ok(frame_count) = dev.read_fifo_frames(&mut fifo_frames).await
                         && frame_count > 0
                     {
-                        let g = average_fifo_frames(&fifo_frames[..frame_count]);
-                        let mut values = [0u8; 12];
-                        if embedded_nn_live::encode_f32_le(&g, &mut values).is_ok() {
-                            let frame = Msg::SensorFrame {
-                                timestamp_ms: Instant::now().as_millis() as u32,
-                                channel_count: 3,
-                                values: &values,
-                            };
-                            if let Ok(len) = frame.encode(&mut encode_buf) {
-                                let _ = tx.write_transfer(&encode_buf[..len], true).await;
+                        for chunk in fifo_frames[..frame_count].chunks(4) {
+                            let g = average_fifo_frames(chunk);
+                            let mut values = [0u8; 12];
+                            if embedded_nn_live::encode_f32_le(&g, &mut values).is_ok() {
+                                let frame = Msg::SensorFrame {
+                                    timestamp_ms: Instant::now().as_millis() as u32,
+                                    channel_count: 3,
+                                    values: &values,
+                                };
+                                if let Ok(len) = frame.encode(&mut encode_buf) {
+                                    let _ = tx.write_transfer(&encode_buf[..len], true).await;
+                                }
                             }
                         }
                     }

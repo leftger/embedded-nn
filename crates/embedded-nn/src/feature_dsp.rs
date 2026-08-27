@@ -155,7 +155,7 @@ pub fn extract_mel_sequence(
         let max_e = out[dst..dst + config.num_mel_bins]
             .iter()
             .copied()
-            .fold(1e-6f32, f32::max);
+            .fold(0.05f32, f32::max); // Minimum noise-floor threshold so stillness produces flat zeros
         for value in &mut out[dst..dst + config.num_mel_bins] {
             *value = (*value / max_e).clamp(0.0, 1.0);
         }
