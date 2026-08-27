@@ -53,6 +53,13 @@ fn sine_fc_direct_tflite_macro_executes_int8_and_f32_boundaries() {
         .unwrap();
         assert_eq!(quantized_input, [quantized]);
         assert_eq!(output_f32, [quantized as f32 * SineFc::OUTPUT_SCALE]);
+
+        let mut auto_output = [0.0f32; SineFc::OUTPUT_DIM];
+        let mut arena = [0u8; SineFc::ARENA_SIZE];
+        SineFc::predict_from_f32(&input_f32, &mut arena, &mut auto_output).unwrap();
+        assert_eq!(auto_output, output_f32);
+        assert_eq!(SineFc::INPUT_SHAPE, [1, 1, 1, 1]);
+        assert_eq!(SineFc::OUTPUT_SHAPE, [1, 1, 1, 1]);
     }
 }
 

@@ -143,6 +143,23 @@ impl Default for DspConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrainBackend {
+    StudioSgd,
+    BurnPtq,
+    BurnQat,
+}
+
+impl TrainBackend {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::StudioSgd => "Studio SGD",
+            Self::BurnPtq => "Burn PTQ",
+            Self::BurnQat => "Burn QAT",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ModelArchitecture {
     DenseMLP,
@@ -233,6 +250,7 @@ pub struct StudioState {
     pub train_loss_history: Vec<f32>,
     pub val_acc_history: Vec<f32>,
     pub confusion_matrix: Vec<Vec<usize>>, // [true_class][pred_class]
+    pub last_train_backend: TrainBackend,
 
     // Trained Weights & Model Graph (DenseMLP head, also reused as the classifier head
     // for TinyConv1D and RecurrentSVDF)
@@ -291,6 +309,7 @@ impl Default for StudioState {
             train_loss_history: Vec::new(),
             val_acc_history: Vec::new(),
             confusion_matrix: vec![vec![0; 4]; 4],
+            last_train_backend: TrainBackend::StudioSgd,
 
             weights_fc1: Vec::new(),
             bias_fc1: Vec::new(),
@@ -322,6 +341,7 @@ impl Default for StudioState {
         state.recompute_all_frames();
         state.reset_training();
         state.run_simulated_training(40);
+        state.last_train_backend = TrainBackend::StudioSgd;
         state.rebuild_model_graph_and_codegen();
         state
     }
@@ -343,6 +363,7 @@ impl StudioState {
         self.allow_demo_export = true;
         self.reset_training();
         self.run_simulated_training(30);
+        self.last_train_backend = TrainBackend::StudioSgd;
         self.rebuild_model_graph_and_codegen();
     }
 
@@ -1165,6 +1186,7 @@ impl StudioState {
         for _ in 0..epochs {
             self.step_training_epoch();
         }
+        self.last_train_backend = TrainBackend::StudioSgd;
     }
 
     /// Host Burn trainer: float Adam then PTQ, or fake-quant QAT then PTQ.
@@ -1269,8 +1291,8 @@ impl StudioState {
                 num_inputs,
                 hidden: self.model_config.hidden_units,
                 num_classes: self.classes.len(),
-                learning_rate: (self.model_config.learning_rate as f64).clamp(0.01, 0.05),
-                epochs: self.model_config.epochs.max(60),
+                learning_rate: (self.model_config.learning_rate as f64).clamp(1e-4, 0.1),
+                epochs: self.model_config.epochs.max(1),
                 mode: if qat {
                     embedded_nn_train::TrainMode::Qat
                 } else {
@@ -1328,6 +1350,11 @@ impl StudioState {
         self.confusion_matrix = conf_matrix;
         self.current_epoch = self.model_config.epochs;
         self.is_training = false;
+        self.last_train_backend = if qat {
+            TrainBackend::BurnQat
+        } else {
+            TrainBackend::BurnPtq
+        };
         self.rebuild_model_graph_and_codegen();
     }
 
@@ -2620,6 +2647,97 @@ mod tests {
             "Burn QAT accuracy must be >= 40% (well above 25% chance), got {}%",
             qat_acc
         );
+        assert_eq!(state.last_train_backend, TrainBackend::BurnQat);
+        assert_integer_export_runs(&state);
+
+        // Studio SGD continues from Burn weights without dropping the export graph.
+        state.step_training_epoch();
+        state.rebuild_model_graph_and_codegen();
+        assert_integer_export_runs(&state);
+    }
+
+    fn assert_integer_export_runs(state: &StudioState) {
+        let graph = state.compiled_graph.as_ref().expect("compiled graph");
+        let mut host = HostInterpreter::new(graph).expect("host interpreter");
+        let sample = state.samples.first().expect("demo sample");
+        let n_classes = state.classes.len();
+        match state.model_config.arch {
+            ModelArchitecture::DenseMLP => {
+                let x = StudioState::mean_pool_frames(&sample.frames, state.dsp.num_mel_bins);
+                let mut q = vec![0i8; x.len()];
+                quantize_mel_s8(&x, INPUT_FEATURE_SCALE, &mut q);
+                let out = host.run(&[&q]).expect("dense infer");
+                assert_eq!(out[0].len(), n_classes);
+            }
+            ModelArchitecture::TinyConv1D => {
+                let mut nhwc = Vec::new();
+                for frame in &sample.frames {
+                    nhwc.extend_from_slice(frame);
+                }
+                let mut q = vec![0i8; nhwc.len()];
+                quantize_mel_s8(&nhwc, INPUT_FEATURE_SCALE, &mut q);
+                let out = host.run(&[&q]).expect("conv infer");
+                assert_eq!(out[0].len(), n_classes);
+            }
+            ModelArchitecture::RecurrentSVDF => {
+                host.reset_external_state();
+                let mut last = Vec::new();
+                for frame in &sample.frames {
+                    let mut q = vec![0i8; frame.len()];
+                    quantize_mel_s8(frame, INPUT_FEATURE_SCALE, &mut q);
+                    last = host.run(&[&q]).expect("svdf infer")[0].clone();
+                }
+                assert_eq!(last.len(), n_classes);
+            }
+        }
+    }
+
+    #[test]
+    fn studio_sgd_then_burn_ptq_shares_export_path() {
+        let mut state = StudioState::default();
+        state.model_config.enable_augmentation = false;
+        state.model_config.epochs = 20;
+        assert_eq!(state.last_train_backend, TrainBackend::StudioSgd);
+        state.run_burn_training(false);
+        assert_eq!(state.last_train_backend, TrainBackend::BurnPtq);
+        assert!(state.compiled_graph.is_some());
+        assert_integer_export_runs(&state);
+    }
+
+    #[test]
+    fn burn_ptq_and_qat_work_for_conv1d_and_svdf() {
+        for arch in [
+            ModelArchitecture::TinyConv1D,
+            ModelArchitecture::RecurrentSVDF,
+        ] {
+            let mut state = StudioState::default();
+            state.model_config.enable_augmentation = false;
+            state.model_config.epochs = 12;
+            state.model_config.learning_rate = 0.03;
+            set_arch(&mut state, arch);
+            state.run_burn_training(false);
+            assert!(
+                state
+                    .train_loss_history
+                    .last()
+                    .copied()
+                    .unwrap_or(f32::NAN)
+                    .is_finite(),
+                "{arch:?} PTQ"
+            );
+            assert_integer_export_runs(&state);
+            state.run_burn_training(true);
+            assert!(
+                state
+                    .train_loss_history
+                    .last()
+                    .copied()
+                    .unwrap_or(f32::NAN)
+                    .is_finite(),
+                "{arch:?} QAT"
+            );
+            assert_integer_export_runs(&state);
+        }
     }
 
     #[test]

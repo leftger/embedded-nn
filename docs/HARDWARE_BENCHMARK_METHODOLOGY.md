@@ -114,6 +114,10 @@ follow on real hardware rather than executed:
 6. Record results as `board,mcu,clock_mhz,model,quant_mode,latency_ns_min,median,max` rows —
    mirroring microflow-rs's `analysis/` CSV convention — once real hardware is available.
 
+Checked-in host and QEMU snapshots live in [`analysis/hardware.csv`](../analysis/hardware.csv)
+(MicroFlow `sine` / `speech` / `person_detect` import metrics, plus the LM3S6965 QEMU sine
+firmware). The STM32WBA65 row is a placeholder until a board run fills latency.
+
 No accuracy-vs-TFLite-Micro on-target comparison is included here because embedded-nn has no
 TFLite Micro reference build wired into this workspace; §1's TFLite Python reference comparison
 is the available substitute and is already bit-exact.

@@ -62,8 +62,67 @@ impl CCodeGenerator {
         writeln!(out, "extern \"C\" {{").unwrap();
         writeln!(out, "#endif\n").unwrap();
 
+        let in_shape = if !graph.inputs.is_empty() {
+            graph.tensors[graph.inputs[0]].shape
+        } else {
+            TensorShape::new_1d(1)
+        };
+        let out_shape = if !graph.outputs.is_empty() {
+            graph.tensors[graph.outputs[0]].shape
+        } else {
+            TensorShape::new_1d(1)
+        };
+
         writeln!(out, "#define {}_INPUT_DIM {}", name_upper, in_elements).unwrap();
         writeln!(out, "#define {}_OUTPUT_DIM {}", name_upper, out_elements).unwrap();
+        writeln!(
+            out,
+            "#define {}_INPUT_SHAPE_N {}",
+            name_upper, in_shape.batches
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "#define {}_INPUT_SHAPE_H {}",
+            name_upper, in_shape.height
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "#define {}_INPUT_SHAPE_W {}",
+            name_upper, in_shape.width
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "#define {}_INPUT_SHAPE_C {}",
+            name_upper, in_shape.channels
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "#define {}_OUTPUT_SHAPE_N {}",
+            name_upper, out_shape.batches
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "#define {}_OUTPUT_SHAPE_H {}",
+            name_upper, out_shape.height
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "#define {}_OUTPUT_SHAPE_W {}",
+            name_upper, out_shape.width
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "#define {}_OUTPUT_SHAPE_C {}",
+            name_upper, out_shape.channels
+        )
+        .unwrap();
         writeln!(
             out,
             "#define {}_ARENA_SIZE_BYTES {}",
@@ -359,6 +418,8 @@ mod tests {
 
         assert!(c_code.contains("#define GESTUREMODEL_INPUT_DIM 16"));
         assert!(c_code.contains("#define GESTUREMODEL_OUTPUT_DIM 4"));
+        assert!(c_code.contains("#define GESTUREMODEL_INPUT_SHAPE_C 16"));
+        assert!(c_code.contains("#define GESTUREMODEL_OUTPUT_SHAPE_C 4"));
         assert!(c_code.contains(
             "int gesturemodel_predict(const int8_t* input, int8_t* output, uint8_t* arena)"
         ));

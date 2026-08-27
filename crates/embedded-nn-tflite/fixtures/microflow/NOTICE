@@ -1,0 +1,14 @@
+These `.tflite` files are copied from MicroFlow:
+
+  https://github.com/matteocarnelos/microflow-rs
+
+MicroFlow is dual-licensed MIT OR Apache-2.0 (Copyright 2024 Matteo Carnelos).
+The models themselves originate from TensorFlow Lite / MLPerf Tiny examples
+(`hello_world` sine, micro_speech, and person detection) and are redistributed
+here so CI can import and code-generate them without a private checkout.
+
+Upstream copies (same bytes as MicroFlow `models/` on `main`):
+
+- sine.tflite
+- speech.tflite
+- person_detect.tflite

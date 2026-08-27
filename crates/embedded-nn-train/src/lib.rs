@@ -16,4 +16,4 @@ pub use mlp::{
     QuantCompare, TrainArch, TrainConfig, TrainMode, TrainReport, dequant_outputs, train_dense_mlp,
 };
 pub use pareto::{ParetoCandidate, evaluate_pareto_candidates, mark_pareto_frontier};
-pub use quantize::ptq_dense_mlp;
+pub use quantize::{nchw_to_nhwc, ptq_dense_mlp, quantize_conv_nchw_features, quantize_features};

@@ -27,7 +27,7 @@ Inspired by and synergized with ARM's **CMSIS-NN**, Google's **LiteRT / TensorFl
 | [`crates/embedded-nn-compiler`](crates/embedded-nn-compiler) | Model graph IR, ahead-of-time interval-colored SRAM arena scheduler, quantization math, and host integer interpreter. |
 | [`crates/embedded-nn-codegen`](crates/embedded-nn-codegen) | Standalone `#![no_std]` Rust code emitter, C99 standalone header generator (`model.h`), and 1-Click CMake / Makefile project bundler (`bundle`). |
 | [`crates/embedded-nn-litert-plugin`](crates/embedded-nn-litert-plugin) | Google LiteRT C ABI Compiler Plugin (`libLiteRtCompilerPlugin_embedded_nn.so`) for native LiteRT model compilation. |
-| [`crates/embedded-nn-tflite`](crates/embedded-nn-tflite) | Upstream TFLite & LiteRT v2 importer with support for MLPerf / TFLM benchmark models (`keyword_scrambled_8bit.tflite`, `person_detect.tflite`, etc.). |
+| [`crates/embedded-nn-tflite`](crates/embedded-nn-tflite) | Upstream TFLite & LiteRT v2 importer with support for MLPerf / TFLM benchmark models (`keyword_scrambled_8bit.tflite`, `person_detect.tflite`, etc.). CI vendors MicroFlow's `sine` / `speech` / `person_detect` `.tflite` files under `fixtures/microflow/`. |
 | [`crates/embedded-nn-train`](crates/embedded-nn-train) | Host Burn QAT/PTQ trainer, SpecAugment, and Auto-TinyML Pareto Frontier Optimizer (`pareto`). |
 | [`crates/embedded-nn-studio`](crates/embedded-nn-studio) | Interactive Desktop & WebAssembly (WASM) TinyML Studio: 3D gesture visualizer, Mel DSP, Burn training, Pareto trade-off explorer, static vs dynamic arena comparator, and USB-HS live inspector. |
 | [`crates/embedded-nn-live`](crates/embedded-nn-live) | Binary USB-HS / UART HIL streaming protocol (`0xE6 0x4E` frames, CRC-16, vendor bulk `1209:e612`) and multi-modal 6-DOF / 9-DOF dataset parser. |
@@ -168,7 +168,7 @@ enn hil infer --input 64
 | **Raspberry Pi Pico (RP2040)** | RP2040 (Dual Cortex-M0+) | Bare-metal `#![no_std]` firmware with `rp2040-hal`, static memory arena, on-board LED inference feedback | [`examples/rp2040-pico`](examples/rp2040-pico) |
 | **STM32WBA65RI Wireless MCU** | Cortex-M33 (DSP + FPU) | STM32WBA65 with Mel DSP, LR1110 accelerometer, WinUSB HIL streaming, SD card logger | [`examples/stm32wba65ri`](examples/stm32wba65ri) |
 | **C99 Bare-Metal Deployment** | STM32 / ESP32 / Keil / Zephyr | Pure C99 header-only deployment with zero external dependencies and zero heap allocations | [`examples/c99-baremetal`](examples/c99-baremetal) |
-| **QEMU Cortex-M3 Semihosting** | QEMU LM3S6965 | Automated semihosting CI/CD verification running quantized inference in emulation | [`examples/qemu-lm3s6965`](examples/qemu-lm3s6965) |
+| **QEMU Cortex-M3 Semihosting** | QEMU LM3S6965 | Automated semihosting CI/CD verification running quantized inference in emulation. Firmware size is recorded in [`analysis/hardware.csv`](analysis/hardware.csv). | [`examples/qemu-lm3s6965`](examples/qemu-lm3s6965) |
 | **PyTorch -> LiteRT Export** | Host Python / PyTorch | Exporting quantized PyTorch neural networks to LiteRT FlatBuffers for `embedded-nn` compilation | [`examples/litert_pytorch_export.py`](examples/litert_pytorch_export.py) |
 
 ---

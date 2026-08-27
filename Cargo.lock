@@ -2281,6 +2281,7 @@ dependencies = [
 name = "embedded-nn-tflite"
 version = "0.2.0"
 dependencies = [
+ "embedded-nn",
  "embedded-nn-codegen",
  "embedded-nn-compiler",
  "flatbuffers",

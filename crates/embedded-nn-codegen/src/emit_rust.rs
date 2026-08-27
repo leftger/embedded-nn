@@ -607,8 +607,21 @@ impl RustCodeGenerator {
             output_tensor.quant.zero_point
         ));
         out.push_str(&format!(
-            "    pub const ARENA_SIZE: usize = ARENA_SIZE_BYTES;\n\n"
+            "    pub const INPUT_SHAPE: [usize; 4] = [{}, {}, {}, {}];\n",
+            input_tensor.shape.batches,
+            input_tensor.shape.height,
+            input_tensor.shape.width,
+            input_tensor.shape.channels
         ));
+        out.push_str(&format!(
+            "    pub const OUTPUT_SHAPE: [usize; 4] = [{}, {}, {}, {}];\n",
+            output_tensor.shape.batches,
+            output_tensor.shape.height,
+            output_tensor.shape.width,
+            output_tensor.shape.channels
+        ));
+        out.push_str("    pub const ARENA_SIZE: usize = ARENA_SIZE_BYTES;\n");
+        out.push_str("    pub const FLASH_WEIGHTS: usize = FLASH_WEIGHTS_BYTES;\n\n");
 
         // Predict method
         out.push_str("    pub fn predict<'a>(\n");
@@ -1152,6 +1165,62 @@ impl RustCodeGenerator {
         out.push_str("                * Self::OUTPUT_SCALE;\n");
         out.push_str("        }\n");
         out.push_str("        Ok(())\n");
+        out.push_str("    }\n\n");
+
+        out.push_str("    pub fn quantize_input(\n");
+        out.push_str("        input: &[f32],\n");
+        out.push_str("        quantized: &mut [i8],\n");
+        out.push_str("    ) -> Result<(), &'static str> {\n");
+        out.push_str(
+            "        if input.len() != Self::INPUT_DIM || quantized.len() != Self::INPUT_DIM {\n",
+        );
+        out.push_str("            return Err(\"Invalid input length\");\n");
+        out.push_str("        }\n");
+        out.push_str("        for (quantized, value) in quantized.iter_mut().zip(input) {\n");
+        out.push_str(
+            "            *quantized = embedded_nn::quantize_f32_to_s8(*value, Self::INPUT_SCALE, Self::INPUT_ZERO_POINT);\n",
+        );
+        out.push_str("        }\n");
+        out.push_str("        Ok(())\n");
+        out.push_str("    }\n\n");
+
+        out.push_str("    pub fn dequantize_output(\n");
+        out.push_str("        quantized: &[i8],\n");
+        out.push_str("        output: &mut [f32],\n");
+        out.push_str("    ) -> Result<(), &'static str> {\n");
+        out.push_str("        if quantized.len() != Self::OUTPUT_DIM || output.len() != Self::OUTPUT_DIM {\n");
+        out.push_str("            return Err(\"Invalid output length\");\n");
+        out.push_str("        }\n");
+        out.push_str("        for (value, quantized) in output.iter_mut().zip(quantized) {\n");
+        out.push_str("            *value = (*quantized as i32 - Self::OUTPUT_ZERO_POINT) as f32\n");
+        out.push_str("                * Self::OUTPUT_SCALE;\n");
+        out.push_str("        }\n");
+        out.push_str("        Ok(())\n");
+        out.push_str("    }\n\n");
+
+        // Typed f32 entry point: stack-allocates the int8 conversion buffer so callers
+        // keep the arena but do not need a separate quantized input slice.
+        out.push_str("    pub fn predict_from_f32(\n");
+        out.push_str("        input: &[f32],\n");
+        out.push_str("        arena: &mut [u8; ARENA_SIZE_BYTES],\n");
+        if has_svdf {
+            out.push_str("        svdf_state: &mut [i8; SVDF_STATE_BYTES],\n");
+        }
+        if has_lstm {
+            out.push_str("        lstm_hidden: &mut [i8; LSTM_HIDDEN_BYTES],\n");
+            out.push_str("        lstm_cell: &mut [i16; LSTM_CELL_ELEMS],\n");
+        }
+        out.push_str("        output: &mut [f32],\n");
+        out.push_str("    ) -> Result<(), &'static str> {\n");
+        out.push_str("        let mut quantized_input = [0i8; Self::INPUT_DIM];\n");
+        out.push_str("        Self::predict_f32(input, &mut quantized_input, arena");
+        if has_svdf {
+            out.push_str(", svdf_state");
+        }
+        if has_lstm {
+            out.push_str(", lstm_hidden, lstm_cell");
+        }
+        out.push_str(", output)\n");
         out.push_str("    }\n\n");
 
         if graph.inputs.len() == 1 && graph.outputs.len() == 1 {
@@ -1762,6 +1831,13 @@ mod tests {
         assert!(code.contains("quantized_input: &mut [i8]"));
         assert!(code.contains("let quantized_output = Self::predict("));
         assert!(code.contains("* Self::OUTPUT_SCALE;"));
+        assert!(code.contains("pub const INPUT_SHAPE: [usize; 4] = [1, 1, 1, 2];"));
+        assert!(code.contains("pub const OUTPUT_SHAPE: [usize; 4] = [1, 1, 1, 1];"));
+        assert!(code.contains("pub fn quantize_input("));
+        assert!(code.contains("pub fn dequantize_output("));
+        assert!(code.contains("pub fn predict_from_f32("));
+        assert!(code.contains("let mut quantized_input = [0i8; Self::INPUT_DIM];"));
+        assert!(code.contains("pub const FLASH_WEIGHTS: usize = FLASH_WEIGHTS_BYTES;"));
     }
 
     #[test]

@@ -143,3 +143,27 @@ pub fn ptq_dense_mlp(
 pub fn quantize_features(features: &[Vec<f32>]) -> Vec<Vec<i8>> {
     features.iter().map(|x| quantize_input(x)).collect()
 }
+
+/// Converts Burn/Studio Conv1D channel-major `[C, T]` into integer-graph NHWC `[T, C]`.
+pub fn nchw_to_nhwc(x: &[f32], channels: usize, frames: usize) -> Vec<f32> {
+    assert_eq!(x.len(), channels.saturating_mul(frames));
+    let mut out = vec![0.0f32; x.len()];
+    for t in 0..frames {
+        for c in 0..channels {
+            out[t * channels + c] = x[c * frames + t];
+        }
+    }
+    out
+}
+
+/// Quantizes channel-major Conv1D features into the NHWC order the integer graph expects.
+pub fn quantize_conv_nchw_features(
+    features: &[Vec<f32>],
+    channels: usize,
+    frames: usize,
+) -> Vec<Vec<i8>> {
+    features
+        .iter()
+        .map(|x| quantize_input(&nchw_to_nhwc(x, channels, frames)))
+        .collect()
+}

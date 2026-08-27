@@ -6,7 +6,13 @@
 use embedded_nn_compiler::builder::ModelBuilder;
 use embedded_nn_compiler::ir::*;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+fn microflow_tflite(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/microflow")
+        .join(name)
+}
 
 #[test]
 fn test_litert_v2_composite_operator_recognition() {
@@ -61,18 +67,13 @@ fn test_litert_v2_composite_operator_recognition() {
 #[test]
 fn test_litert_v2_metadata_and_shape_preservation() {
     // Validate that all MLPerf Tiny LiteRT models preserve shape tensors
-    let model_paths = [
-        "/home/usuario/Projects/open-source-repos/microflow-rs/models/sine.tflite",
-        "/home/usuario/Projects/open-source-repos/microflow-rs/models/speech.tflite",
-        "/home/usuario/Projects/open-source-repos/microflow-rs/models/person_detect.tflite",
-    ];
+    let model_names = ["sine.tflite", "speech.tflite", "person_detect.tflite"];
 
-    for path_str in &model_paths {
-        let path = Path::new(path_str);
-        if !path.exists() {
-            continue;
-        }
-        let bytes = fs::read(path).unwrap();
+    for name in model_names {
+        let path = microflow_tflite(name);
+        let bytes = fs::read(&path).unwrap_or_else(|err| {
+            panic!("{name} must be vendored at {:?}: {err}", path);
+        });
         let graph = embedded_nn_tflite::import_tflite(&bytes).unwrap();
         assert!(!graph.tensors.is_empty());
         assert!(!graph.layers.is_empty());

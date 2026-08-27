@@ -15,6 +15,8 @@ ground-truth check: import it, generate code, run `predict()`, and diff against 
   delegate — see note below) for the corresponding input, i.e. ground truth to diff against.
 - `dense_mlp.tflite` — the model itself.
 
+Vendored MicroFlow models used by CI importer tests live in [`microflow/`](microflow/).
+
 To regenerate (requires a TensorFlow install; Python 3.12 recommended — TF wheels lag behind
 newer Python releases):
 

@@ -20,6 +20,13 @@ fn main() -> ! {
     let input = [64i8; model::SineFc::INPUT_DIM];
     let mut arena = [0u8; model::SineFc::ARENA_SIZE];
 
+    let _ = hprintln!(
+        "embedded-nn QEMU analysis: model=sine_fc_int8 arena={} weights={} input_shape={:?}",
+        model::SineFc::ARENA_SIZE,
+        model::SineFc::FLASH_WEIGHTS,
+        model::SineFc::INPUT_SHAPE
+    );
+
     let status = match model::SineFc::predict(&input, &mut arena) {
         Ok(output) if output == input => {
             let _ = hprintln!("embedded-nn QEMU inference passed: {:?}", output);

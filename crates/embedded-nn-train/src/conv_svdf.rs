@@ -18,7 +18,7 @@ use crate::mlp::{
     QuantCompare, TrainArch, TrainB, TrainConfig, TrainMode, TrainReport, flatten_linear,
     maybe_fake_quant, maybe_fake_quant_act, relu, train_dense_mlp,
 };
-use crate::quantize::{INPUT_SCALE, quantize_features};
+use crate::quantize::{INPUT_SCALE, quantize_conv_nchw_features, quantize_features};
 
 #[derive(Module, Debug, Clone)]
 struct ConvNet {
@@ -48,7 +48,14 @@ impl ConvNet {
     fn forward(&self, x: Tensor<TrainB, 3>, fake_quant: bool) -> Tensor<TrainB, 2> {
         let y = relu(self.conv.forward(x).swap_dims(1, 2).flatten(1, 2));
         let y = maybe_fake_quant_act(y, fake_quant);
-        let h = relu(self.fc1.forward(y));
+        let w1 = maybe_fake_quant(self.fc1.weight.val(), fake_quant);
+        let b1 = self
+            .fc1
+            .bias
+            .as_ref()
+            .map(|b| b.val().unsqueeze())
+            .expect("bias");
+        let h = relu(y.matmul(w1) + b1);
         let h = maybe_fake_quant_act(h, fake_quant);
         let w2 = maybe_fake_quant(self.fc2.weight.val(), fake_quant);
         h.matmul(w2)
@@ -426,7 +433,7 @@ fn ptq_svdf(
     let qf = calculate_symmetric_quant_s8(wf.iter().fold(0.1f32, |a, w| a.max(w.abs())));
     let qt = calculate_symmetric_quant_s8(wt.iter().fold(0.1f32, |a, w| a.max(w.abs())));
     let q2 = calculate_symmetric_quant_s8(w2.iter().fold(0.1f32, |a, w| a.max(w.abs())));
-    let state_scale = 0.1f32;
+    let state_scale = INPUT_SCALE;
     let (svdf_range, logits_range) = calibrate_svdf(
         features, wf, wt, sb, w2, b2, units, rank, memory, mel, classes, num_frames,
     );
@@ -621,16 +628,30 @@ fn train_svdf(features: &[Vec<f32>], labels: &[usize], config: &TrainConfig) -> 
         .with_grad_clipping(Some(GradientClippingConfig::Norm(1.0)))
         .init::<TrainB, SvdfNet>();
     let loss_fn = CrossEntropyLossConfig::new().init(&device);
-    let fake = config.mode == TrainMode::Qat;
+    let total_epochs = config.epochs.max(1);
+    let warmup_epochs = if config.mode == TrainMode::Qat {
+        (total_epochs / 4).max(5)
+    } else {
+        0
+    };
     let mut final_loss = 0.0f32;
-    for _ in 0..config.epochs.max(1) {
+    for epoch in 0..total_epochs {
+        let fake = config.mode == TrainMode::Qat && epoch >= warmup_epochs;
         let mut epoch_loss = 0.0;
         for (x, &y) in features.iter().zip(labels.iter()) {
             let frames = Tensor::<TrainB, 2>::from_data(
                 TensorData::new(x.clone(), [num_frames, config.num_inputs]),
                 &device,
             );
-            let feat = relu(model.feature.forward(frames));
+            let wf = maybe_fake_quant(model.feature.weight.val(), fake);
+            let bf = model
+                .feature
+                .bias
+                .as_ref()
+                .map(|b| b.val().unsqueeze())
+                .expect("bias");
+            // No ReLU on the feature projection: matches Studio / MCU SVDF.
+            let feat = frames.matmul(wf) + bf;
             let feat = maybe_fake_quant_act(feat, fake);
             let start = num_frames.saturating_sub(memory_size);
             #[allow(clippy::single_range_in_vec_init)]
@@ -642,7 +663,8 @@ fn train_svdf(features: &[Vec<f32>], labels: &[usize], config: &TrainConfig) -> 
             } else {
                 window
             };
-            let mixed = taps.swap_dims(0, 1) * model.time.val();
+            let wt = maybe_fake_quant(model.time.val(), fake);
+            let mixed = taps.swap_dims(0, 1) * wt;
             let units_t = mixed
                 .sum_dim(1)
                 .reshape([1, units, rank])
@@ -746,7 +768,12 @@ pub fn compare_quant_paths(
     qat_cfg.mode = TrainMode::Qat;
     let ptq = train_model(features, labels, &ptq_cfg);
     let qat = train_model(features, labels, &qat_cfg);
-    let q_in = quantize_features(features);
+    let q_in = match config.arch {
+        TrainArch::Conv1d { num_frames, .. } => {
+            quantize_conv_nchw_features(features, config.num_inputs, num_frames)
+        }
+        _ => quantize_features(features),
+    };
     let mut ptq_host = HostInterpreter::new(&ptq.graph).unwrap();
     let mut qat_host = HostInterpreter::new(&qat.graph).unwrap();
     let mut compare = QuantCompare {
@@ -819,8 +846,77 @@ mod tests {
             },
         );
         let mut host = HostInterpreter::new(&report.graph).unwrap();
-        let q = quantize_features(&x);
+        let q = quantize_conv_nchw_features(&x, mel, frames);
         assert_eq!(host.run(&[&q[0]]).unwrap()[0].len(), 2);
+    }
+
+    #[test]
+    fn conv1d_ptq_and_qat_integer_graphs_run() {
+        let frames = 4;
+        let mel = 2;
+        let mut x = Vec::new();
+        let mut y = Vec::new();
+        for i in 0..8 {
+            let mut sample = vec![0.0f32; mel * frames];
+            if i % 2 == 0 {
+                sample[..frames].fill(1.0); // channel 0, all time (NCHW)
+                y.push(0);
+            } else {
+                sample[frames..].fill(1.0); // channel 1
+                y.push(1);
+            }
+            x.push(sample);
+        }
+        let cfg = |mode: TrainMode| TrainConfig {
+            num_inputs: mel,
+            hidden: 4,
+            num_classes: 2,
+            learning_rate: 0.05,
+            epochs: 12,
+            mode,
+            arch: TrainArch::Conv1d {
+                num_frames: frames,
+                kernel_w: 2,
+                out_channels: 2,
+            },
+        };
+        for mode in [TrainMode::Ptq, TrainMode::Qat] {
+            let report = train_model(&x, &y, &cfg(mode));
+            assert!(report.final_loss.is_finite(), "{mode:?} loss");
+            let mut host = HostInterpreter::new(&report.graph).unwrap();
+            let q = quantize_conv_nchw_features(&x, mel, frames);
+            assert_eq!(host.run(&[&q[0]]).unwrap()[0].len(), 2);
+        }
+    }
+
+    #[test]
+    fn svdf_ptq_and_qat_integer_graphs_run() {
+        let frames = 4;
+        let mel = 3;
+        let x = vec![vec![0.2f32; frames * mel]; 4];
+        let y = vec![0usize, 1, 0, 1];
+        let cfg = |mode: TrainMode| TrainConfig {
+            num_inputs: mel,
+            hidden: 2,
+            num_classes: 2,
+            learning_rate: 0.05,
+            epochs: 8,
+            mode,
+            arch: TrainArch::Svdf {
+                num_frames: frames,
+                rank: 1,
+                memory_size: 2,
+            },
+        };
+        for mode in [TrainMode::Ptq, TrainMode::Qat] {
+            let report = train_model(&x, &y, &cfg(mode));
+            assert!(report.final_loss.is_finite(), "{mode:?} loss");
+            let mut host = HostInterpreter::new(&report.graph).unwrap();
+            host.reset_external_state();
+            let q = quantize_features(&x);
+            // One frame = first `mel` values of the NHWC-style [T, C] layout used by Burn SVDF.
+            assert_eq!(host.run(&[&q[0][..mel]]).unwrap()[0].len(), 2);
+        }
     }
 
     #[test]

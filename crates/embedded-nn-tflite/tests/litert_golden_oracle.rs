@@ -6,16 +6,20 @@
 use embedded_nn_compiler::arena::ArenaScheduler;
 use embedded_nn_compiler::interpreter::HostInterpreter;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+fn microflow_tflite(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/microflow")
+        .join(name)
+}
 
 #[test]
 fn test_litert_sine_golden_execution() {
-    let path =
-        Path::new("/home/usuario/Projects/open-source-repos/microflow-rs/models/sine.tflite");
-    if !path.exists() {
-        return;
-    }
-    let bytes = fs::read(path).expect("sine.tflite must exist");
+    let path = microflow_tflite("sine.tflite");
+    let bytes = fs::read(&path).unwrap_or_else(|err| {
+        panic!("sine.tflite must be vendored at {:?}: {err}", path);
+    });
     let graph = embedded_nn_tflite::import_tflite(&bytes).expect("import must succeed");
 
     // Verify arena scheduling
@@ -39,12 +43,10 @@ fn test_litert_sine_golden_execution() {
 
 #[test]
 fn test_litert_speech_arena_and_interpreter() {
-    let path =
-        Path::new("/home/usuario/Projects/open-source-repos/microflow-rs/models/speech.tflite");
-    if !path.exists() {
-        return;
-    }
-    let bytes = fs::read(path).expect("speech.tflite must exist");
+    let path = microflow_tflite("speech.tflite");
+    let bytes = fs::read(&path).unwrap_or_else(|err| {
+        panic!("speech.tflite must be vendored at {:?}: {err}", path);
+    });
     let graph = embedded_nn_tflite::import_tflite(&bytes).expect("import must succeed");
 
     let arena_plan = ArenaScheduler::schedule(&graph);

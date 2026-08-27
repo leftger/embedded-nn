@@ -1,0 +1,6 @@
+model,platform,mcu,clock_mhz,flash_weights_bytes,sram_arena_bytes,accuracy_mae,latency_us,firmware_text_bytes,firmware_data_bytes,notes
+sine.tflite,host-interpreter,n/a,n/a,420,36,0.046989,,,n/a,MAE vs sin(x) on 100 pts in [0 2pi]
+speech.tflite,host-interpreter,n/a,n/a,16752,7920,,,,n/a,import plus arena schedule only
+person_detect.tflite,host-interpreter,n/a,n/a,240824,82944,,,,n/a,import plus arena schedule only
+sine_fc_int8.tflite,qemu-lm3s6965evb,cortex-m3,50,5,8,0.0000,,11340,0,constructed identity fixture; rust-size text/data; QEMU not cycle-accurate
+sine.tflite,stm32wba65ri,cortex-m33,100,,,,,,,not measured in CI

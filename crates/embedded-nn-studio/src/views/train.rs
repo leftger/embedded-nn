@@ -30,11 +30,12 @@ impl TrainView {
 
         ui.add_space(4.0);
         ui.label(
-            "Integrated Production QAT/PTQ Trainer with Adam optimizer, SpecAugment, and fake-quant straight-through estimators for Dense MLP, TinyConv1D, and Recurrent SVDF.",
+            "Studio SGD, Burn PTQ, and Burn QAT share the same weights, DSP contract, and export graph. Use Burn for production integer models; Studio SGD is the interactive demo trainer.",
         );
         ui.label(format!(
-            "Active model source: {}",
-            state.model_source.display_name()
+            "Active model source: {} | Last trainer: {}",
+            state.model_source.display_name(),
+            state.last_train_backend.label()
         ));
         ui.add_space(8.0);
 

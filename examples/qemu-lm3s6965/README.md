@@ -2,7 +2,8 @@
 
 This standalone, workspace-excluded `no_std` binary expands a TFLite fixture with
 `embedded-nn-macros`, runs inference with a caller-owned arena, checks the expected output, and
-reports success or failure through semihosting.
+reports success or failure through semihosting. Release `text`/`data` sizes are recorded in
+[`analysis/hardware.csv`](../../analysis/hardware.csv).
 
 ```console
 rustup target add thumbv7m-none-eabi

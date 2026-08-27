@@ -17,6 +17,7 @@ flatbuffers = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+embedded-nn = { workspace = true, features = ["float"] }
 embedded-nn-codegen = { workspace = true }
 
 [[example]]
