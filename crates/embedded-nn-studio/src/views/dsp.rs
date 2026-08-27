@@ -152,6 +152,20 @@ impl DspView {
 
                 ui.separator();
 
+                ui.label("Mel energy floor:");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut state.dsp.mel_energy_floor)
+                            .range(0.001..=1.0)
+                            .speed(0.001),
+                    )
+                    .changed()
+                {
+                    dsp_changed = true;
+                }
+
+                ui.separator();
+
                 let num_frames = StudioState::num_frames_for_config(&state.dsp);
                 ui.label(format!("→ {} frames/sample", num_frames));
             });

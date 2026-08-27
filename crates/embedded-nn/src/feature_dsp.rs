@@ -16,6 +16,12 @@ pub const MAX_WINDOW: usize = 128;
 pub const MAX_CAPTURE: usize = 512;
 /// Largest Mel filter count this helper will accept.
 pub const MAX_MEL_BINS: usize = 32;
+/// Per-frame Mel energy floor used when max-normalizing a frame.
+///
+/// Quiet / still windows whose peak bin is below this value are divided by the
+/// floor instead of by a near-zero max, so they stay near zero instead of
+/// being stretched to 1.0. Must match [`embedded_nn_compiler::dsp_contract::DspContract`].
+pub const DEFAULT_MEL_ENERGY_FLOOR: f32 = 0.05;
 
 /// Window applied before the FFT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +53,8 @@ pub struct FeatureDspConfig {
     pub capture_samples: usize,
     /// Symmetric s8 scale used after Mel extraction (`1/127` matches Studio).
     pub input_scale: f32,
+    /// Minimum divisor when max-normalizing each Mel frame. See [`DEFAULT_MEL_ENERGY_FLOOR`].
+    pub mel_energy_floor: f32,
 }
 
 /// A DSP configuration the helper cannot execute with its stack limits.
@@ -75,12 +83,14 @@ pub fn extract_mel_sequence(
 ) -> core::result::Result<usize, FeatureDspError> {
     if config.window_size == 0
         || config.window_size > MAX_WINDOW
-        || !config.window_size.is_multiple_of(2)
+        || !config.window_size.is_power_of_two()
         || config.capture_samples == 0
         || config.capture_samples > MAX_CAPTURE
         || config.num_mel_bins == 0
         || config.num_mel_bins > MAX_MEL_BINS
         || config.frame_hop_size == 0
+        || !config.mel_energy_floor.is_finite()
+        || config.mel_energy_floor <= 0.0
     {
         return Err(FeatureDspError::UnsupportedConfig);
     }
@@ -155,7 +165,7 @@ pub fn extract_mel_sequence(
         let max_e = out[dst..dst + config.num_mel_bins]
             .iter()
             .copied()
-            .fold(0.05f32, f32::max); // Minimum noise-floor threshold so stillness produces flat zeros
+            .fold(config.mel_energy_floor, f32::max);
         for value in &mut out[dst..dst + config.num_mel_bins] {
             *value = (*value / max_e).clamp(0.0, 1.0);
         }
@@ -181,9 +191,8 @@ pub fn quantize_mel_s8(values: &[f32], scale: f32, out: &mut [i8]) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn default_contract_shape_is_stable() {
-        let cfg = FeatureDspConfig {
+    fn contract_cfg() -> FeatureDspConfig {
+        FeatureDspConfig {
             window_size: 64,
             window_kind: WindowKind::Hann,
             num_mel_bins: 16,
@@ -192,7 +201,13 @@ mod tests {
             frame_hop_size: 32,
             capture_samples: 256,
             input_scale: 1.0 / 127.0,
-        };
+            mel_energy_floor: DEFAULT_MEL_ENERGY_FLOOR,
+        }
+    }
+
+    #[test]
+    fn default_contract_shape_is_stable() {
+        let cfg = contract_cfg();
         assert_eq!(cfg.num_frames(), 7);
         let mut out = [0.0f32; 7 * 16];
         let frames = extract_mel_sequence(&cfg, &[0.2; 40], &mut out).unwrap();
@@ -203,7 +218,7 @@ mod tests {
     #[test]
     fn test_feature_dsp_error_on_unsupported_config() {
         let invalid_cfg = FeatureDspConfig {
-            window_size: 0, // Invalid 0 window size
+            window_size: 0,
             window_kind: WindowKind::Rectangular,
             num_mel_bins: 16,
             high_pass_cutoff_hz: 0.0,
@@ -211,6 +226,7 @@ mod tests {
             frame_hop_size: 32,
             capture_samples: 256,
             input_scale: 1.0 / 127.0,
+            mel_energy_floor: DEFAULT_MEL_ENERGY_FLOOR,
         };
         let mut out = [0.0f32; 128];
         assert_eq!(
@@ -225,11 +241,12 @@ mod tests {
             window_size: 64,
             window_kind: WindowKind::Hamming,
             num_mel_bins: 16,
-            high_pass_cutoff_hz: 0.0, // High-pass bypassed
+            high_pass_cutoff_hz: 0.0,
             sample_rate_hz: 100.0,
             frame_hop_size: 32,
             capture_samples: 256,
             input_scale: 1.0 / 127.0,
+            mel_energy_floor: DEFAULT_MEL_ENERGY_FLOOR,
         };
         let mut out = [0.0f32; 10]; // Output buffer too small (requires 7 * 16 = 112)
         assert_eq!(
@@ -251,5 +268,24 @@ mod tests {
         assert_eq!(out[3], -127);
         assert_eq!(out[4], 127); // Clamped at 127
         assert_eq!(out[5], -128); // Clamped at -128
+    }
+
+    #[test]
+    fn even_non_power_of_two_window_is_rejected() {
+        let mut cfg = contract_cfg();
+        cfg.window_size = 6;
+        let mut out = [0.0f32; 128];
+        assert_eq!(
+            extract_mel_sequence(&cfg, &[0.1; 64], &mut out),
+            Err(FeatureDspError::UnsupportedConfig)
+        );
+    }
+
+    #[test]
+    fn energy_floor_keeps_quiet_frames_near_zero() {
+        let cfg = contract_cfg();
+        let mut out = [0.0f32; 7 * 16];
+        extract_mel_sequence(&cfg, &[1e-4; 40], &mut out).unwrap();
+        assert!(out.iter().all(|v| *v < 0.05));
     }
 }

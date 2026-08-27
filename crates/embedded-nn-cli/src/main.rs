@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use embedded_nn_codegen::RustCodeGenerator;
 use embedded_nn_compiler::arena::ArenaScheduler;
-use embedded_nn_compiler::dsp_contract::DspContract;
+use embedded_nn_compiler::dsp_contract::{DEFAULT_MEL_ENERGY_FLOOR, DspContract};
 use embedded_nn_compiler::ir::ModelGraph;
 use embedded_nn_live::host::{OwnedMsg, Transport, UsbBridge, handshake};
 use std::collections::BTreeMap;
@@ -103,6 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     capture_samples: 256,
                     input_scale: 1.0 / 127.0,
                     input_zero_point: 0,
+                    mel_energy_floor: DEFAULT_MEL_ENERGY_FLOOR,
                 };
                 fs::write(&sidecar, serde_json::to_string_pretty(&contract)?)?;
                 println!("Generated Rust inference code written to {:?}", out_path);

@@ -14,6 +14,7 @@ pub const DEFAULT_DSP: FeatureDspConfig = FeatureDspConfig {
     frame_hop_size: 32,
     capture_samples: 256,
     input_scale: 1.0 / 127.0,
+    mel_energy_floor: embedded_nn::feature_dsp::DEFAULT_MEL_ENERGY_FLOOR,
 };
 
 /// Extracts the first Mel frame as s8, for models whose `INPUT_DIM` is `num_mel_bins`.

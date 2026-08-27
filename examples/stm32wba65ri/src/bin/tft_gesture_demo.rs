@@ -326,6 +326,7 @@ async fn main(spawner: Spawner) {
         frame_hop_size: 32,
         capture_samples: CAPTURE_SAMPLES,
         input_scale: 1.0 / 127.0,
+        mel_energy_floor: embedded_nn::feature_dsp::DEFAULT_MEL_ENERGY_FLOOR,
     };
 
     let mut ordered_x = [0.0f32; CAPTURE_SAMPLES];

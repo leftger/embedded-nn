@@ -18,7 +18,7 @@ pub mod quant;
 
 pub use arena::{ArenaPlan, ArenaScheduler, TensorAllocation};
 pub use builder::ModelBuilder;
-pub use dsp_contract::DspContract;
+pub use dsp_contract::{DEFAULT_MEL_ENERGY_FLOOR, DspContract};
 pub use interpreter::{HostInterpreter, InterpreterError};
 pub use ir::*;
 pub use prune::{

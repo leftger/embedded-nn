@@ -58,6 +58,7 @@ const DSP_CONFIG: FeatureDspConfig = FeatureDspConfig {
     frame_hop_size: 32,            // 50% frame overlap
     capture_samples: 256,          // 16ms audio capture window
     input_scale: 1.0 / 127.0,      // Symmetric s8 normalization scale
+    mel_energy_floor: embedded_nn::feature_dsp::DEFAULT_MEL_ENERGY_FLOOR,
 };
 
 const NUM_FRAMES: usize = 7; // (256 - 64) / 32 + 1 = 7 frames

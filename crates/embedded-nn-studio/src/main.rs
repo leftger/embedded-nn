@@ -6,7 +6,9 @@
     clippy::erasing_op,
     clippy::manual_div_ceil,
     clippy::manual_clamp,
-    clippy::needless_range_loop
+    clippy::needless_range_loop,
+    clippy::type_complexity,
+    clippy::collapsible_if
 )]
 
 mod app;

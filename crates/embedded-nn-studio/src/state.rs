@@ -73,6 +73,13 @@ pub struct DspConfig {
     /// Fixed capture-window length every raw waveform is truncated/zero-padded to before framing,
     /// so every sample yields the same number of frames regardless of its original recording length.
     pub capture_samples: usize,
+    /// Per-frame Mel energy floor (see `DspContract::mel_energy_floor`).
+    #[serde(default = "default_mel_energy_floor")]
+    pub mel_energy_floor: f32,
+}
+
+fn default_mel_energy_floor() -> f32 {
+    embedded_nn::feature_dsp::DEFAULT_MEL_ENERGY_FLOOR
 }
 
 impl WindowFunction {
@@ -98,6 +105,7 @@ impl DspConfig {
             capture_samples: self.capture_samples,
             input_scale: INPUT_FEATURE_SCALE,
             input_zero_point: 0,
+            mel_energy_floor: self.mel_energy_floor,
         }
     }
 
@@ -115,6 +123,7 @@ impl DspConfig {
             frame_hop_size: self.frame_hop_size,
             capture_samples: self.capture_samples,
             input_scale: INPUT_FEATURE_SCALE,
+            mel_energy_floor: self.mel_energy_floor,
         }
     }
 }
@@ -129,6 +138,7 @@ impl Default for DspConfig {
             sample_rate: 100.0,
             frame_hop_size: 32,
             capture_samples: 256,
+            mel_energy_floor: default_mel_energy_floor(),
         }
     }
 }
@@ -560,20 +570,8 @@ impl StudioState {
         let cfg = dsp.to_feature_config();
         let n_frames = cfg.num_frames();
         let mut flat = vec![0.0f32; n_frames * cfg.num_mel_bins];
-
-        // If raw is 3D interleaved [ax, ay, az], compute vector magnitude per timestep
-        let signal: Vec<f32> =
-            if raw.len() >= 3 && raw.len().is_multiple_of(3) && raw.len() > dsp.capture_samples {
-                raw.as_chunks::<3>()
-                    .0
-                    .iter()
-                    .map(|c| (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt())
-                    .collect()
-            } else {
-                raw.to_vec()
-            };
-
-        let _ = extract_mel_sequence(&cfg, &signal, &mut flat);
+        // `raw_waveform` is already a scalar series (ingest/import collapse XYZ to magnitude).
+        let _ = extract_mel_sequence(&cfg, raw, &mut flat);
         flat.chunks(cfg.num_mel_bins)
             .map(|frame| frame.to_vec())
             .collect()
@@ -2566,6 +2564,10 @@ mod tests {
         assert_eq!(contract.window_type, "hann");
         assert_eq!(contract.window_size, 64);
         assert_eq!(contract.input_zero_point, 0);
+        assert_eq!(
+            contract.mel_energy_floor,
+            embedded_nn::feature_dsp::DEFAULT_MEL_ENERGY_FLOOR
+        );
     }
 
     #[test]

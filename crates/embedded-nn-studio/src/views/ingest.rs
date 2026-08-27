@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 /// Points retained per channel in the live oscilloscope ring buffer.
 const SCOPE_HISTORY: usize = 400;
+/// Dataset rows drawn in the explorer; older samples stay in `state.samples`.
+const MAX_LISTED_SAMPLES: usize = 30;
 
 /// Names the first three channels X/Y/Z, matching the 3-DOF accelerometer the
 /// HIL agent streams; anything beyond that is shown by index.
@@ -583,6 +585,12 @@ impl IngestView {
         // Bottom: Recorded Dataset Browser Table
         ui.group(|ui| {
             ui.label("📁 Dataset Samples Explorer");
+            if state.samples.len() > MAX_LISTED_SAMPLES {
+                ui.label(format!(
+                    "Showing latest {MAX_LISTED_SAMPLES} of {} samples",
+                    state.samples.len()
+                ));
+            }
             ui.separator();
 
             egui::ScrollArea::vertical()
@@ -602,7 +610,7 @@ impl IngestView {
 
                             let mut delete_id = None;
                             let mut relabel = None;
-                            for sample in state.samples.iter().rev() {
+                            for sample in state.samples.iter().rev().take(MAX_LISTED_SAMPLES) {
                                 ui.label(format!("#{:03}", sample.id));
 
                                 ui.push_id(sample.id, |ui| {

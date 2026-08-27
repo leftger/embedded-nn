@@ -103,6 +103,220 @@ fn quantize_bias(bias: &[f32], input_scale: f32, weight_scale: f32) -> Vec<i32> 
         .collect()
 }
 
+fn relu_hi(values: impl Iterator<Item = f32>) -> f32 {
+    values.fold(0.0f32, f32::max).max(0.1)
+}
+
+fn logits_range(lo: f32, hi: f32) -> (f32, f32) {
+    if lo.is_finite() && hi > lo {
+        (lo, hi)
+    } else {
+        (-1.0, 1.0)
+    }
+}
+
+/// Float Conv1D + ReLU + Dense head matching the exported integer graph.
+/// `x` is channel-major `[mel, frames]` as produced by Studio for Burn Conv1d.
+#[allow(clippy::too_many_arguments)]
+fn forward_conv1d_float(
+    x: &[f32],
+    weights_conv: &[f32],
+    bias_conv: &[f32],
+    weights_fc1: &[f32],
+    bias_fc1: &[f32],
+    weights_fc2: &[f32],
+    bias_fc2: &[f32],
+    num_frames: usize,
+    kernel_w: usize,
+    out_ch: usize,
+    mel: usize,
+    hidden: usize,
+    classes: usize,
+) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    let out_w = num_frames - kernel_w + 1;
+    let conv_len = out_ch * out_w;
+    let mut conv_act = vec![0.0f32; conv_len];
+    for oc in 0..out_ch {
+        for ow in 0..out_w {
+            let mut sum = bias_conv[oc];
+            for k in 0..kernel_w {
+                let t = ow + k;
+                for ic in 0..mel {
+                    sum += x[ic * num_frames + t] * weights_conv[(oc * kernel_w + k) * mel + ic];
+                }
+            }
+            conv_act[ow * out_ch + oc] = sum.max(0.0);
+        }
+    }
+    let mut hidden_act = vec![0.0f32; hidden];
+    for h in 0..hidden {
+        let mut sum = bias_fc1[h];
+        for i in 0..conv_len {
+            sum += conv_act[i] * weights_fc1[h * conv_len + i];
+        }
+        hidden_act[h] = sum.max(0.0);
+    }
+    let mut logits = vec![0.0f32; classes];
+    for c in 0..classes {
+        let mut sum = bias_fc2[c];
+        for h in 0..hidden {
+            sum += hidden_act[h] * weights_fc2[c * hidden + h];
+        }
+        logits[c] = sum;
+    }
+    (conv_act, hidden_act, logits)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn calibrate_conv1d(
+    features: &[Vec<f32>],
+    weights_conv: &[f32],
+    bias_conv: &[f32],
+    weights_fc1: &[f32],
+    bias_fc1: &[f32],
+    weights_fc2: &[f32],
+    bias_fc2: &[f32],
+    num_frames: usize,
+    kernel_w: usize,
+    out_ch: usize,
+    mel: usize,
+    hidden: usize,
+    classes: usize,
+) -> ((f32, f32), (f32, f32), (f32, f32)) {
+    let mut conv_hi = 0.0f32;
+    let mut hidden_hi = 0.0f32;
+    let mut logit_lo = f32::INFINITY;
+    let mut logit_hi = f32::NEG_INFINITY;
+    let expect_len = mel * num_frames;
+    for x in features {
+        if x.len() != expect_len {
+            continue;
+        }
+        let (conv_act, hidden_act, logits) = forward_conv1d_float(
+            x,
+            weights_conv,
+            bias_conv,
+            weights_fc1,
+            bias_fc1,
+            weights_fc2,
+            bias_fc2,
+            num_frames,
+            kernel_w,
+            out_ch,
+            mel,
+            hidden,
+            classes,
+        );
+        conv_hi = conv_hi.max(relu_hi(conv_act.iter().copied()));
+        hidden_hi = hidden_hi.max(relu_hi(hidden_act.iter().copied()));
+        for &l in &logits {
+            logit_lo = logit_lo.min(l);
+            logit_hi = logit_hi.max(l);
+        }
+    }
+    (
+        (0.0, conv_hi.max(0.1)),
+        (0.0, hidden_hi.max(0.1)),
+        logits_range(logit_lo, logit_hi),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn forward_svdf_float(
+    x: &[f32],
+    wf: &[f32],
+    wt: &[f32],
+    sb: &[f32],
+    w2: &[f32],
+    b2: &[f32],
+    units: usize,
+    rank: usize,
+    memory: usize,
+    mel: usize,
+    classes: usize,
+    num_frames: usize,
+) -> (Vec<f32>, Vec<f32>) {
+    let feature_dim = units * rank;
+    let lookback_start = num_frames.saturating_sub(memory);
+    let lookback_len = num_frames - lookback_start;
+    let mut raw_feature = vec![vec![0.0f32; feature_dim]; lookback_len];
+    for (li, t) in (lookback_start..num_frames).enumerate() {
+        for f in 0..feature_dim {
+            let mut acc = 0.0f32;
+            for i in 0..mel {
+                acc += x[t * mel + i] * wf[f * mel + i];
+            }
+            raw_feature[li][f] = acc;
+        }
+    }
+    let mut svdf_out = vec![0.0f32; units];
+    for u in 0..units {
+        let mut acc = sb[u];
+        for r in 0..rank {
+            let f = u * rank + r;
+            for m in 0..memory {
+                let t = num_frames as isize - memory as isize + m as isize;
+                if t >= lookback_start as isize {
+                    let li = (t - lookback_start as isize) as usize;
+                    acc += raw_feature[li][f] * wt[f * memory + m];
+                }
+            }
+        }
+        svdf_out[u] = acc;
+    }
+    let mut logits = vec![0.0f32; classes];
+    for c in 0..classes {
+        let mut sum = b2[c];
+        for u in 0..units {
+            sum += svdf_out[u] * w2[c * units + u];
+        }
+        logits[c] = sum;
+    }
+    (svdf_out, logits)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn calibrate_svdf(
+    features: &[Vec<f32>],
+    wf: &[f32],
+    wt: &[f32],
+    sb: &[f32],
+    w2: &[f32],
+    b2: &[f32],
+    units: usize,
+    rank: usize,
+    memory: usize,
+    mel: usize,
+    classes: usize,
+    num_frames: usize,
+) -> ((f32, f32), (f32, f32)) {
+    let mut svdf_lo = f32::INFINITY;
+    let mut svdf_hi = f32::NEG_INFINITY;
+    let mut logit_lo = f32::INFINITY;
+    let mut logit_hi = f32::NEG_INFINITY;
+    let expect_len = mel * num_frames;
+    for x in features {
+        if x.len() != expect_len {
+            continue;
+        }
+        let (svdf_out, logits) = forward_svdf_float(
+            x, wf, wt, sb, w2, b2, units, rank, memory, mel, classes, num_frames,
+        );
+        for &v in &svdf_out {
+            svdf_lo = svdf_lo.min(v);
+            svdf_hi = svdf_hi.max(v);
+        }
+        for &l in &logits {
+            logit_lo = logit_lo.min(l);
+            logit_hi = logit_hi.max(l);
+        }
+    }
+    (
+        logits_range(svdf_lo, svdf_hi),
+        logits_range(logit_lo, logit_hi),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn ptq_conv1d(
     weights_conv: &[f32],
@@ -117,15 +331,31 @@ fn ptq_conv1d(
     mel: usize,
     hidden: usize,
     classes: usize,
+    features: &[Vec<f32>],
 ) -> embedded_nn_compiler::ir::ModelGraph {
     let out_w = num_frames - kernel_w + 1;
     let conv_len = out_ch * out_w;
     let qc = calculate_symmetric_quant_s8(weights_conv.iter().fold(0.1f32, |a, w| a.max(w.abs())));
     let q1 = calculate_symmetric_quant_s8(weights_fc1.iter().fold(0.1f32, |a, w| a.max(w.abs())));
     let q2 = calculate_symmetric_quant_s8(weights_fc2.iter().fold(0.1f32, |a, w| a.max(w.abs())));
-    let conv_q = output_quant(INPUT_SCALE, qc.scale, 0.0, 1.0);
-    let hidden_q = output_quant(conv_q.scale, q1.scale, 0.0, 1.0);
-    let out_q = output_quant(hidden_q.scale, q2.scale, -2.0, 2.0);
+    let (conv_range, hidden_range, logits_range) = calibrate_conv1d(
+        features,
+        weights_conv,
+        bias_conv,
+        weights_fc1,
+        bias_fc1,
+        weights_fc2,
+        bias_fc2,
+        num_frames,
+        kernel_w,
+        out_ch,
+        mel,
+        hidden,
+        classes,
+    );
+    let conv_q = output_quant(INPUT_SCALE, qc.scale, conv_range.0, conv_range.1);
+    let hidden_q = output_quant(conv_q.scale, q1.scale, hidden_range.0, hidden_range.1);
+    let out_q = output_quant(hidden_q.scale, q2.scale, logits_range.0, logits_range.1);
     let mut builder = ModelBuilder::new("BurnConv1d");
     let in_id = builder.add_input(
         "frames",
@@ -190,13 +420,18 @@ fn ptq_svdf(
     memory: usize,
     mel: usize,
     classes: usize,
+    num_frames: usize,
+    features: &[Vec<f32>],
 ) -> embedded_nn_compiler::ir::ModelGraph {
     let qf = calculate_symmetric_quant_s8(wf.iter().fold(0.1f32, |a, w| a.max(w.abs())));
     let qt = calculate_symmetric_quant_s8(wt.iter().fold(0.1f32, |a, w| a.max(w.abs())));
     let q2 = calculate_symmetric_quant_s8(w2.iter().fold(0.1f32, |a, w| a.max(w.abs())));
     let state_scale = 0.1f32;
-    let svdf_q = output_quant(state_scale, qt.scale, -1.0, 1.0);
-    let out_q = output_quant(svdf_q.scale, q2.scale, -2.0, 2.0);
+    let (svdf_range, logits_range) = calibrate_svdf(
+        features, wf, wt, sb, w2, b2, units, rank, memory, mel, classes, num_frames,
+    );
+    let svdf_q = output_quant(state_scale, qt.scale, svdf_range.0, svdf_range.1);
+    let out_q = output_quant(svdf_q.scale, q2.scale, logits_range.0, logits_range.1);
     let in_q = QuantParams {
         multiplier: calculate_output_requant_multiplier(INPUT_SCALE, qf.scale, state_scale).0,
         shift: calculate_output_requant_multiplier(INPUT_SCALE, qf.scale, state_scale).1,
@@ -321,6 +556,7 @@ fn train_conv1d(features: &[Vec<f32>], labels: &[usize], config: &TrainConfig) -
         config.num_inputs,
         config.hidden,
         config.num_classes,
+        features,
     );
     TrainReport {
         weights_fc1: w1,
@@ -445,6 +681,8 @@ fn train_svdf(features: &[Vec<f32>], labels: &[usize], config: &TrainConfig) -> 
         memory_size,
         config.num_inputs,
         config.num_classes,
+        num_frames,
+        features,
     );
     TrainReport {
         weights_fc1: Vec::new(),
@@ -583,5 +821,46 @@ mod tests {
         let mut host = HostInterpreter::new(&report.graph).unwrap();
         let q = quantize_features(&x);
         assert_eq!(host.run(&[&q[0]]).unwrap()[0].len(), 2);
+    }
+
+    #[test]
+    fn conv1d_ptq_calibrates_unbounded_relu_range() {
+        let frames = 4;
+        let mel = 2;
+        let kernel_w = 2;
+        let out_ch = 1;
+        let hidden = 1;
+        let classes = 2;
+        let out_w = frames - kernel_w + 1;
+        let conv_len = out_ch * out_w;
+        let x = vec![1.0f32; mel * frames];
+        let weights_conv = vec![5.0f32; out_ch * kernel_w * mel];
+        let bias_conv = vec![0.0f32; out_ch];
+        let weights_fc1 = vec![0.0f32; hidden * conv_len];
+        let bias_fc1 = vec![0.0f32; hidden];
+        let weights_fc2 = vec![0.0f32; classes * hidden];
+        let bias_fc2 = vec![0.0f32; classes];
+        let graph = ptq_conv1d(
+            &weights_conv,
+            &bias_conv,
+            &weights_fc1,
+            &bias_fc1,
+            &weights_fc2,
+            &bias_fc2,
+            frames,
+            kernel_w,
+            out_ch,
+            mel,
+            hidden,
+            classes,
+            &[x],
+        );
+        let conv = graph
+            .tensors
+            .iter()
+            .find(|t| t.name.contains("conv"))
+            .expect("conv tensor");
+        // Peak conv activation is 5 * 2 * 2 = 20, so scale must exceed the old [0, 1] width.
+        assert!(conv.quant.scale > 1.0 / 255.0 + 0.01);
     }
 }

@@ -90,6 +90,8 @@ jobs:
         working-directory: examples/stm32wba65ri
       - run: cargo check --features hil-usb --bin hil_agent
         working-directory: examples/stm32wba65ri
+      - run: cargo check --bin tft_gesture_demo
+        working-directory: examples/stm32wba65ri
 
   msrv:
     name: MSRV check
