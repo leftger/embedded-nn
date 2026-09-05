@@ -24,10 +24,18 @@ rfd = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+log = "0.4"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 nusb = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement"] }
+web-sys = { version = "0.3", features = [
+    "Window", "Document", "Element", "HtmlCanvasElement",
+    "Navigator", "WorkerNavigator", "Usb", "UsbDevice", "UsbRequestType",
+    "UsbRecipient", "UsbDirection", "UsbTransferStatus",
+    "UsbControlTransferParameters", "UsbInTransferResult", "UsbOutTransferResult",
+    "UsbConfiguration", "UsbInterface", "UsbAlternateInterface", "UsbEndpoint"
+] }
+getrandom = { version = "0.3", features = ["wasm_js"] }

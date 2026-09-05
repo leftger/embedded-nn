@@ -13,5 +13,9 @@ pub use protocol::{
     SENSOR_HEADER, TRAILER_LEN, crc16, decode_f32_le, encode_f32_le,
 };
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+pub mod host;
+
+#[cfg(all(feature = "std", target_arch = "wasm32"))]
+#[path = "host_wasm.rs"]
 pub mod host;

@@ -5,17 +5,20 @@
 </p>
 
 [![crates.io](https://img.shields.io/crates/v/embedded-nn.svg)](https://crates.io/crates/embedded-nn)
-[![docs.rs](https://img.shields.io/docsrs/embedded-nn)](https://docs.rs/embedded-nn)
+[![docs.rs](https://img.docs.rs/embedded-nn)](https://docs.rs/embedded-nn)
 [![CI](https://github.com/leftger/embedded-nn/actions/workflows/ci.yml/badge.svg)](https://github.com/leftger/embedded-nn/actions/workflows/ci.yml)
+[![Live Studio WASM](https://img.shields.io/badge/Live%20Demo-TinyML%20Studio%20WASM-brightgreen)](https://leftger.github.io/embedded-nn/)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 
 A pure Rust, `#![no_std]` neural network inference runtime, ahead-of-time (AOT) compiler, and TinyML platform for microcontrollers and edge silicon. Designed with zero dynamic allocations, static interval-colored SRAM memory reuse, sub-byte LUT quantization, and functional safety integrity checks.
 
 Inspired by and synergized with ARM's **CMSIS-NN**, Google's **LiteRT / TensorFlow Lite Micro**, and **MicroFlow**.
 
+🌐 **[Try the Interactive WebAssembly TinyML Studio Live in Browser](https://leftger.github.io/embedded-nn/)**  
 📖 **[Read the End-to-End TinyML Guide (Data Collection -> Training -> Deployment)](docs/END_TO_END_TINYML_GUIDE.md)**  
 📖 **[Read the PyTorch -> LiteRT -> embedded-nn Export Workflow](docs/LITERT_PYTORCH_WORKFLOW.md)**  
 📖 **[Read the Live Hardware-in-the-Loop Protocol Specification](docs/LIVE_PROTOCOL.md)**  
+🤝 **[Read the Contributor Guidelines (Adding Operators & no_std Rules)](CONTRIBUTING.md)**  
 
 ---
 
@@ -166,10 +169,20 @@ enn hil infer --input 64
 | **6-DOF IMU Gesture Recognition** | Wearable MCUs | Accelerometer + Gyroscope sliding window, `#[embedded_nn_model]` compile-time macro, zero-heap gesture decoding | `cargo run --package embedded-nn --example gesture_recognition --features="libm"`<br>[`examples/imu-gesture`](examples/imu-gesture) |
 | **Sub-Byte 4-Bit & Codebook LUT** | Ultra-Low Flash Silicon | Signed 4-bit (`s4`) nibble packing (50% Flash reduction) & 16-entry nonlinear codebook centroids | `cargo run --package embedded-nn --example subbyte_quantization`<br>[`examples/subbyte-quantization`](examples/subbyte-quantization) |
 | **Raspberry Pi Pico (RP2040)** | RP2040 (Dual Cortex-M0+) | Bare-metal `#![no_std]` firmware with `rp2040-hal`, static memory arena, on-board LED inference feedback | [`examples/rp2040-pico`](examples/rp2040-pico) |
+| **Embassy Async (RP2040)** | RP2040 / Cortex-M | Async TinyML multi-tasking with Embassy channels, non-blocking sensor acquisition, zero-alloc inference | [`examples/embassy-rp2040`](examples/embassy-rp2040) |
 | **STM32WBA65RI Wireless MCU** | Cortex-M33 (DSP + FPU) | STM32WBA65 with Mel DSP, LR1110 accelerometer, WinUSB HIL streaming, SD card logger | [`examples/stm32wba65ri`](examples/stm32wba65ri) |
 | **C99 Bare-Metal Deployment** | STM32 / ESP32 / Keil / Zephyr | Pure C99 header-only deployment with zero external dependencies and zero heap allocations | [`examples/c99-baremetal`](examples/c99-baremetal) |
 | **QEMU Cortex-M3 Semihosting** | QEMU LM3S6965 | Automated semihosting CI/CD verification running quantized inference in emulation. Firmware size is recorded in [`analysis/hardware.csv`](analysis/hardware.csv). | [`examples/qemu-lm3s6965`](examples/qemu-lm3s6965) |
 | **PyTorch -> LiteRT Export** | Host Python / PyTorch | Exporting quantized PyTorch neural networks to LiteRT FlatBuffers for `embedded-nn` compilation | [`examples/litert_pytorch_export.py`](examples/litert_pytorch_export.py) |
+
+---
+
+## Contributing
+
+Contributions from the open-source community are very welcome! Whether you are interested in adding new neural network operators, optimizing bare-metal SIMD kernels, integrating new hardware targets, or improving compiler passes:
+
+- 📖 **[Read the Contributor Guide](CONTRIBUTING.md)** for architecture overview, `#![no_std]` safety rules, and step-by-step instructions for implementing new operators.
+- 🐛 **[Report Bugs or Propose Features](https://github.com/leftger/embedded-nn/issues)** using our issue templates.
 
 ---
 

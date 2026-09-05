@@ -123,35 +123,38 @@ impl eframe::App for EmbeddedNnStudioApp {
                             }
                         }
                     });
-                if ui.button("Open .tflite").clicked()
-                    && let Some(path) = rfd::FileDialog::new()
-                        .add_filter("TensorFlow Lite", &["tflite"])
-                        .pick_file()
+                #[cfg(not(target_arch = "wasm32"))]
                 {
-                    let _ = self.state.import_tflite_path(path);
-                }
-                if ui.button("Open ModelGraph .json").clicked()
-                    && let Some(path) = rfd::FileDialog::new()
-                        .add_filter("embedded-nn ModelGraph JSON", &["json"])
-                        .pick_file()
-                {
-                    let _ = self.state.import_json_path(path);
-                }
-                if ui.button("Open Dataset (.jsonl/csv)").clicked()
-                    && let Some(paths) = rfd::FileDialog::new()
-                        .add_filter(
-                            "Dataset Interchange (.jsonl, .csv, .json)",
-                            &["jsonl", "ndjson", "json", "csv", "tsv"],
-                        )
-                        .pick_files()
-                {
-                    match self.state.import_dataset_paths(&paths) {
-                        Ok(n) => {
-                            self.ingest_view.import_status = format!("Imported {n} sample(s).");
-                            self.current_tab = StudioTab::Ingest;
-                        }
-                        Err(e) => {
-                            self.ingest_view.import_status = format!("Import error: {e}");
+                    if ui.button("Open .tflite").clicked()
+                        && let Some(path) = rfd::FileDialog::new()
+                            .add_filter("TensorFlow Lite", &["tflite"])
+                            .pick_file()
+                    {
+                        let _ = self.state.import_tflite_path(path);
+                    }
+                    if ui.button("Open ModelGraph .json").clicked()
+                        && let Some(path) = rfd::FileDialog::new()
+                            .add_filter("embedded-nn ModelGraph JSON", &["json"])
+                            .pick_file()
+                    {
+                        let _ = self.state.import_json_path(path);
+                    }
+                    if ui.button("Open Dataset (.jsonl/csv)").clicked()
+                        && let Some(paths) = rfd::FileDialog::new()
+                            .add_filter(
+                                "Dataset Interchange (.jsonl, .csv, .json)",
+                                &["jsonl", "ndjson", "json", "csv", "tsv"],
+                            )
+                            .pick_files()
+                    {
+                        match self.state.import_dataset_paths(&paths) {
+                            Ok(n) => {
+                                self.ingest_view.import_status = format!("Imported {n} sample(s).");
+                                self.current_tab = StudioTab::Ingest;
+                            }
+                            Err(e) => {
+                                self.ingest_view.import_status = format!("Import error: {e}");
+                            }
                         }
                     }
                 }
@@ -292,6 +295,7 @@ impl eframe::App for EmbeddedNnStudioApp {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run_studio() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -313,10 +317,21 @@ pub fn run_studio() -> eframe::Result<()> {
 
 #[cfg(target_arch = "wasm32")]
 pub async fn run_studio_web(canvas_id: &str) -> Result<(), eframe::wasm_bindgen::JsValue> {
+    use eframe::wasm_bindgen::JsCast;
+    let document = web_sys::window()
+        .expect("No window")
+        .document()
+        .expect("No document");
+    let canvas = document
+        .get_element_by_id(canvas_id)
+        .expect("Failed to find canvas")
+        .dyn_into::<web_sys::HtmlCanvasElement>()
+        .expect("Element is not a canvas");
+
     let web_options = eframe::WebOptions::default();
     eframe::WebRunner::new()
         .start(
-            canvas_id,
+            canvas,
             web_options,
             Box::new(|cc| {
                 configure_theme(&cc.egui_ctx);

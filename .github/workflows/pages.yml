@@ -1,0 +1,66 @@
+name: Deploy Studio to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/embedded-nn-studio/**'
+      - 'crates/embedded-nn/**'
+      - 'crates/embedded-nn-compiler/**'
+      - 'crates/embedded-nn-codegen/**'
+      - 'crates/embedded-nn-tflite/**'
+      - 'crates/embedded-nn-train/**'
+      - '.cargo/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: 'pages'
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Trunk
+        run: |
+          TRUNK_VERSION="v0.21.8"
+          curl -L -f --retry 3 --retry-delay 2 \
+            https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xzf - -C /usr/local/bin
+
+      - name: Build WebAssembly Studio with Trunk
+        run: |
+          cd crates/embedded-nn-studio
+          trunk build --release --public-url "/embedded-nn/"
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: crates/embedded-nn-studio/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

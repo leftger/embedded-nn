@@ -1,0 +1,18 @@
+[package]
+name = "embassy-rp2040-inference"
+version = "0.1.0"
+edition = "2021"
+authors = ["Gerzain Mata <leftger@gmail.com>"]
+description = "Raspberry Pi Pico (RP2040 Cortex-M0+) async TinyML inference using Embassy and embedded-nn"
+
+[dependencies]
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+panic-halt = "0.2"
+
+embassy-executor = { version = "0.7", features = ["arch-cortex-m", "executor-thread", "executor-interrupt"] }
+embassy-time = { version = "0.4" }
+embassy-rp = { version = "0.3", features = ["rp2040", "time-driver", "critical-section-impl"] }
+embassy-sync = { version = "0.6" }
+
+embedded-nn = { path = "../../crates/embedded-nn", default-features = false }

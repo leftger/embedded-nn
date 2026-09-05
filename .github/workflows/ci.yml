@@ -93,6 +93,20 @@ jobs:
       - run: cargo check --bin tft_gesture_demo
         working-directory: examples/stm32wba65ri
 
+  check-embassy-rp2040:
+    name: Check Embassy RP2040 firmware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv6m-none-eabi
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: examples/embassy-rp2040 -> target
+      - run: cargo check
+        working-directory: examples/embassy-rp2040
+
   msrv:
     name: MSRV check
     runs-on: ubuntu-latest

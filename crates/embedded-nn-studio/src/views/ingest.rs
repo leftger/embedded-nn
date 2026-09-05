@@ -2,6 +2,8 @@ use crate::state::StudioState;
 use eframe::egui;
 use embedded_nn_live::decode_f32_le;
 use embedded_nn_live::host::{DeviceLink, OwnedMsg, UsbBridge};
+#[allow(unused_imports)]
+use std::path::Path;
 use std::path::PathBuf;
 
 /// Points retained per channel in the live oscilloscope ring buffer.
@@ -245,6 +247,7 @@ impl IngestView {
         Some((0..len).map(|i| [x[i], y[i], z[i]]).collect())
     }
 
+    #[allow(dead_code)]
     fn import_dataset_files(&mut self, state: &mut StudioState, paths: &[PathBuf]) {
         let replace = self.replace_on_import;
         match state.import_dataset_paths_mode(paths, replace) {
@@ -416,6 +419,7 @@ impl IngestView {
 
                 ui.checkbox(&mut self.replace_on_import, "Replace on import");
 
+                #[cfg(not(target_arch = "wasm32"))]
                 if ui.button("📂 Import Dataset File(s)").clicked()
                     && let Some(paths) = rfd::FileDialog::new()
                         .add_filter(

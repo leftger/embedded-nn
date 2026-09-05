@@ -1956,6 +1956,7 @@ impl StudioState {
         self.rebuild_model_graph_and_codegen();
     }
 
+    #[allow(dead_code)]
     pub fn import_dataset_paths_mode(
         &mut self,
         paths: &[PathBuf],
@@ -2155,8 +2156,10 @@ impl StudioState {
         self.last_device_logits = logits.iter().map(|&value| value as i8).collect();
     }
 
+    #[allow(dead_code)]
     pub const PROJECT_VERSION: u32 = 1;
 
+    #[allow(dead_code)]
     pub fn to_project(&self) -> StudioProject {
         StudioProject {
             version: Self::PROJECT_VERSION,
@@ -2182,6 +2185,7 @@ impl StudioState {
         }
     }
 
+    #[allow(dead_code)]
     pub fn apply_project(&mut self, proj: StudioProject) {
         self.dsp = proj.dsp;
         self.model_config = proj.model_config;
@@ -2207,6 +2211,7 @@ impl StudioState {
         self.run_test_inference();
     }
 
+    #[allow(dead_code)]
     pub fn save_project_file(&self, path: &Path) -> Result<String, String> {
         let proj = self.to_project();
         let json = serde_json::to_string_pretty(&proj)
@@ -2216,6 +2221,7 @@ impl StudioState {
         Ok(format!("Saved project to {}", path.display()))
     }
 
+    #[allow(dead_code)]
     pub fn load_project_file(&mut self, path: &Path) -> Result<String, String> {
         let contents = std::fs::read_to_string(path)
             .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
@@ -2232,6 +2238,7 @@ impl StudioState {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StudioProject {
     pub version: u32,
