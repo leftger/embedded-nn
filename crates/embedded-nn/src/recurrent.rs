@@ -35,6 +35,16 @@ pub fn lstm_step_s8_s16(
     let input_dim = input.len();
     let hidden_dim = hidden_state.len();
 
+    if input_dim == 0
+        || hidden_dim == 0
+        || cell_state.len() < hidden_dim
+        || weight_input.len() < 4 * hidden_dim * input_dim
+        || weight_hidden.len() < 4 * hidden_dim * hidden_dim
+        || bias.len() < 4 * hidden_dim
+    {
+        return Err(crate::types::Error::ArgumentError);
+    }
+
     for h in 0..hidden_dim {
         // Gates layout: 0: input (i), 1: forget (f), 2: cell (g), 3: output (o)
         let w_i_in = &weight_input[0 * hidden_dim * input_dim + h * input_dim..];
@@ -117,6 +127,16 @@ pub fn lstm_step_s16(
 ) -> Result<()> {
     let input_dim = input.len();
     let hidden_dim = hidden_state.len();
+
+    if input_dim == 0
+        || hidden_dim == 0
+        || cell_state.len() < hidden_dim
+        || weight_input.len() < 4 * hidden_dim * input_dim
+        || weight_hidden.len() < 4 * hidden_dim * hidden_dim
+        || bias.len() < 4 * hidden_dim
+    {
+        return Err(crate::types::Error::ArgumentError);
+    }
 
     for h in 0..hidden_dim {
         let w_i_in = &weight_input[0 * hidden_dim * input_dim + h * input_dim..];
@@ -220,9 +240,21 @@ pub fn svdf_s8(
     output: &mut [i8],
 ) -> Result<()> {
     let input_dim = input.len();
+    if input_dim == 0 || rank == 0 || weights_feature.is_empty() || weights_time.is_empty() {
+        return Err(crate::types::Error::ArgumentError);
+    }
+    if weights_feature.len() % input_dim != 0 {
+        return Err(crate::types::Error::ArgumentError);
+    }
     let feature_dim = weights_feature.len() / input_dim;
+    if feature_dim == 0 || weights_time.len() % feature_dim != 0 || feature_dim % rank != 0 {
+        return Err(crate::types::Error::ArgumentError);
+    }
     let time_steps = weights_time.len() / feature_dim;
     let units = feature_dim / rank;
+    if state.len() < feature_dim * time_steps || output.len() < units {
+        return Err(crate::types::Error::ArgumentError);
+    }
 
     for f in 0..feature_dim {
         let state_slice = &mut state[f * time_steps..(f + 1) * time_steps];
@@ -276,9 +308,21 @@ pub fn svdf_state_s16_s8(
     output: &mut [i8],
 ) -> Result<()> {
     let input_dim = input.len();
+    if input_dim == 0 || rank == 0 || weights_feature.is_empty() || weights_time.is_empty() {
+        return Err(crate::types::Error::ArgumentError);
+    }
+    if weights_feature.len() % input_dim != 0 {
+        return Err(crate::types::Error::ArgumentError);
+    }
     let feature_dim = weights_feature.len() / input_dim;
+    if feature_dim == 0 || weights_time.len() % feature_dim != 0 || feature_dim % rank != 0 {
+        return Err(crate::types::Error::ArgumentError);
+    }
     let time_steps = weights_time.len() / feature_dim;
     let units = feature_dim / rank;
+    if state.len() < feature_dim * time_steps || output.len() < units {
+        return Err(crate::types::Error::ArgumentError);
+    }
 
     for f in 0..feature_dim {
         let state_slice = &mut state[f * time_steps..(f + 1) * time_steps];

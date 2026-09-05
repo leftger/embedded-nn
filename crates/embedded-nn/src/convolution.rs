@@ -30,11 +30,19 @@ pub fn convolve_s8(
     let output_w = output_dims.w as usize;
     let output_c = output_dims.c as usize;
 
-    if input_c == 0 || output_c == 0 {
+    if input_c == 0
+        || output_c == 0
+        || kernel_c == 0
+        || kernel_c > input_c
+        || input_c % kernel_c != 0
+    {
         return Err(Error::ArgumentError);
     }
 
     let groups = input_c / kernel_c;
+    if groups == 0 || output_c % groups != 0 {
+        return Err(Error::ArgumentError);
+    }
     let output_c_per_group = output_c / groups;
 
     for b in 0..input_batches {
@@ -117,11 +125,19 @@ pub fn convolve_per_channel_s8(
     let output_w = output_dims.w as usize;
     let output_c = output_dims.c as usize;
 
-    if input_c == 0 || output_c == 0 {
+    if input_c == 0
+        || output_c == 0
+        || kernel_c == 0
+        || kernel_c > input_c
+        || input_c % kernel_c != 0
+    {
         return Err(Error::ArgumentError);
     }
 
     let groups = input_c / kernel_c;
+    if groups == 0 || output_c % groups != 0 {
+        return Err(Error::ArgumentError);
+    }
     let output_c_per_group = output_c / groups;
 
     for b in 0..input_batches {
@@ -206,6 +222,10 @@ pub fn depthwise_conv_per_channel_s8(
     let output_w = output_dims.w as usize;
     let output_c = output_dims.c as usize;
 
+    if input_c == 0 || output_c == 0 || dw_params.ch_mult == 0 {
+        return Err(Error::ArgumentError);
+    }
+
     let ch_mult = dw_params.ch_mult as usize;
 
     for b in 0..input_batches {
@@ -284,78 +304,55 @@ pub fn transpose_conv_s8(
     let output_w = output_dims.w as usize;
     let output_c = output_dims.c as usize;
 
-    let stride_y = conv_params.stride.h as usize;
-    let stride_x = conv_params.stride.w as usize;
-    let pad_y = conv_params.padding.top as usize;
-    let pad_x = conv_params.padding.left as usize;
+    let stride_y = conv_params.stride.h;
+    let stride_x = conv_params.stride.w;
+    let pad_y = conv_params.padding.top;
+    let pad_x = conv_params.padding.left;
 
-    let mut accum_buffer = [0i32; 1024]; // Stack scratch accumulator for 1024 elements chunk or dynamic iteration
-    let scratch_size = output_h * output_w * output_c;
+    if stride_y <= 0 || stride_x <= 0 || input_c == 0 || output_c == 0 {
+        return Err(Error::ArgumentError);
+    }
 
     for b in 0..input_batches {
-        for out_idx in 0..scratch_size {
-            let out_c = out_idx % output_c;
-            let b_val = match bias {
-                Some(b_slice) => b_slice[out_c],
-                None => 0,
-            };
-            if out_idx < accum_buffer.len() {
-                accum_buffer[out_idx] = b_val;
-            }
-        }
+        for out_y in 0..output_h {
+            for out_x in 0..output_w {
+                for out_c in 0..output_c {
+                    let mut acc: i32 = match bias {
+                        Some(b_slice) => b_slice[out_c],
+                        None => 0,
+                    };
 
-        // Scatter-accumulate input into output positions
-        for in_y in 0..input_h {
-            for in_x in 0..input_w {
-                for ky in 0..kernel_h {
-                    let out_y = in_y * stride_y + ky;
-                    if out_y >= pad_y && out_y < output_h + pad_y {
-                        let actual_out_y = out_y - pad_y;
-                        for kx in 0..kernel_w {
-                            let out_x = in_x * stride_x + kx;
-                            if out_x >= pad_x && out_x < output_w + pad_x {
-                                let actual_out_x = out_x - pad_x;
+                    for ky in 0..kernel_h {
+                        let y_val = out_y as i32 + pad_y - ky as i32;
+                        if y_val >= 0 && y_val % stride_y == 0 {
+                            let in_y = (y_val / stride_y) as usize;
+                            if in_y < input_h {
+                                for kx in 0..kernel_w {
+                                    let x_val = out_x as i32 + pad_x - kx as i32;
+                                    if x_val >= 0 && x_val % stride_x == 0 {
+                                        let in_x = (x_val / stride_x) as usize;
+                                        if in_x < input_w {
+                                            for in_c in 0..input_c {
+                                                let in_idx = ((b * input_h + in_y) * input_w
+                                                    + in_x)
+                                                    * input_c
+                                                    + in_c;
+                                                let ker_idx = ((out_c * kernel_h + ky) * kernel_w
+                                                    + kx)
+                                                    * input_c
+                                                    + in_c;
 
-                                for out_c in 0..output_c {
-                                    for in_c in 0..input_c {
-                                        let in_idx = ((b * input_h + in_y) * input_w + in_x)
-                                            * input_c
-                                            + in_c;
-                                        let ker_idx = ((out_c * kernel_h + ky) * kernel_w + kx)
-                                            * input_c
-                                            + in_c;
-
-                                        let lhs = input[in_idx] as i32 + conv_params.input_offset;
-                                        let rhs = kernel[ker_idx] as i32;
-
-                                        let buf_idx = (actual_out_y * output_w + actual_out_x)
-                                            * output_c
-                                            + out_c;
-                                        if buf_idx < accum_buffer.len() {
-                                            accum_buffer[buf_idx] += lhs * rhs;
+                                                let lhs =
+                                                    input[in_idx] as i32 + conv_params.input_offset;
+                                                let rhs = kernel[ker_idx] as i32;
+                                                acc += lhs * rhs;
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                }
-            }
-        }
-
-        // Requantize and write back output
-        for out_y in 0..output_h {
-            for out_x in 0..output_w {
-                for out_c in 0..output_c {
-                    let buf_idx = (out_y * output_w + out_x) * output_c + out_c;
-                    let acc = if buf_idx < accum_buffer.len() {
-                        accum_buffer[buf_idx]
-                    } else {
-                        match bias {
-                            Some(b_slice) => b_slice[out_c],
-                            None => 0,
-                        }
-                    };
 
                     let mult = quant_params.multiplier[out_c];
                     let shift = quant_params.shift[out_c];

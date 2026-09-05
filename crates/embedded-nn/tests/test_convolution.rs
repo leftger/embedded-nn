@@ -380,3 +380,44 @@ fn test_convolve_s8_error_paths() {
     );
     assert_eq!(err, Err(Error::ArgumentError));
 }
+
+#[test]
+fn test_transpose_conv_s8_large_tensor_beyond_1024() {
+    let conv_params = ConvParams {
+        input_offset: 0,
+        output_offset: 0,
+        stride: Tile::new(2, 2),
+        padding: Padding2D::symmetric(0, 0),
+        dilation: Tile::new(1, 1),
+        activation: Activation::int8_unconstrained(),
+    };
+    let mults = [2147483647];
+    let shifts = [0];
+    let quant_params = PerChannelQuantParams::new(&mults, &shifts);
+
+    // 1x32x32x1 input -> 1x64x64x1 output = 4096 elements (> 1024 elements)
+    let input_dims = Dims::new(1, 32, 32, 1);
+    let input = [1i8; 1024];
+    let filter_dims = Dims::new(1, 2, 2, 1);
+    let kernel = [1i8, 1i8, 1i8, 1i8];
+    let output_dims = Dims::new(1, 64, 64, 1);
+    let mut output = [0i8; 4096];
+
+    transpose_conv_s8(
+        &conv_params,
+        &quant_params,
+        &input_dims,
+        &input,
+        &filter_dims,
+        &kernel,
+        None,
+        &output_dims,
+        &mut output,
+    )
+    .unwrap();
+
+    // Verify values throughout the entire 4096-element range, specifically beyond index 1024
+    assert_eq!(output[0], 1);
+    assert_eq!(output[2048], 1);
+    assert_eq!(output[4095], 1);
+}

@@ -42,7 +42,12 @@ pub fn f32_to_f16(f: f32) -> u16 {
 
     if exp == 0xFF {
         // Inf / NaN
-        ((sign as u16) << 15) | (0x001F << 10) | ((mant >> 13) as u16)
+        if mant == 0 {
+            ((sign as u16) << 15) | (0x001F << 10)
+        } else {
+            let m16 = ((mant >> 13) as u16).max(1);
+            ((sign as u16) << 15) | (0x001F << 10) | m16
+        }
     } else if exp == 0 {
         (sign as u16) << 15
     } else {
@@ -226,6 +231,12 @@ pub fn softmax_f32(
     row_size: usize,
     output: &mut [f32],
 ) -> Result<()> {
+    if num_rows == 0 || row_size == 0 {
+        return Ok(());
+    }
+    if input.len() < num_rows * row_size || output.len() < num_rows * row_size {
+        return Err(crate::types::Error::ArgumentError);
+    }
     for row in 0..num_rows {
         let in_row = &input[row * row_size..(row + 1) * row_size];
         let out_row = &mut output[row * row_size..(row + 1) * row_size];

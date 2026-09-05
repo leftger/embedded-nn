@@ -28,3 +28,12 @@ criterion = { workspace = true }
 [[bench]]
 name = "kernels"
 harness = false
+
+[[example]]
+name = "keyword_spotting"
+required-features = ["dsp", "libm"]
+
+[[example]]
+name = "gesture_recognition"
+required-features = ["libm"]
+

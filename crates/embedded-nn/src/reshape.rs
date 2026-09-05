@@ -14,6 +14,9 @@ pub fn reshape_s8(
     }
 
     let len = input_dims.total_size();
+    if input.len() < len || output.len() < len {
+        return Err(Error::ArgumentError);
+    }
     output[..len].copy_from_slice(&input[..len]);
     Ok(())
 }

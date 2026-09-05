@@ -60,6 +60,12 @@ fn test_f16_special_cases_inf_nan_subnormal() {
     let subnormal_h = 0x0001u16; // smallest subnormal f16
     let subnormal_f32 = f16_to_f32(subnormal_h);
     assert!(subnormal_f32 > 0.0 && subnormal_f32 < 0.0001);
+
+    // NaN conversion (ensure low-mantissa NaNs never turn into Infinity)
+    let nan_f32 = f32::from_bits(0x7F80_0001); // Smallest mantissa NaN
+    let nan_h = f32_to_f16(nan_f32);
+    let back_nan = f16_to_f32(nan_h);
+    assert!(back_nan.is_nan(), "Expected NaN, got {}", back_nan);
 }
 
 #[test]

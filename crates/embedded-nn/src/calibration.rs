@@ -28,6 +28,9 @@ impl<'a> OutputLayerCalibratorF32<'a> {
         weights: &'a mut [f32],
         bias: &'a mut [f32],
     ) -> Result<Self, &'static str> {
+        if num_classes == 0 || num_features == 0 {
+            return Err("num_classes and num_features must be greater than zero");
+        }
         if weights.len() != num_classes * num_features {
             return Err("Weights buffer length must match num_classes * num_features");
         }
@@ -165,6 +168,9 @@ impl<'a> OutputLayerCalibratorS8<'a> {
         weights: &'a mut [i8],
         bias: &'a mut [i32],
     ) -> Result<Self, &'static str> {
+        if num_classes == 0 || num_features == 0 {
+            return Err("num_classes and num_features must be greater than zero");
+        }
         if weights.len() != num_classes * num_features {
             return Err("Weights buffer length must match num_classes * num_features");
         }

@@ -50,7 +50,7 @@ pub fn one_over_one_plus_x_for_x_in_0_1(val: i32) -> i32 {
     let shift = 1i32 << 29;
     for _ in 0..3 {
         let diff = shift - mul_sat(half_denominator, x);
-        x += mul_sat(x, diff) << 2;
+        x = x.wrapping_add(mul_sat(x, diff).wrapping_shl(2));
     }
 
     // `x` can converge to exactly 2^30 for an input of zero. Doubling that value with a
@@ -70,7 +70,17 @@ pub fn softmax_s8(
     diff_min: i32,
     output: &mut [i8],
 ) -> Result<()> {
-    let mask = 1i32 << shift;
+    if num_rows == 0 || row_size == 0 {
+        return Ok(());
+    }
+    if input.len() < num_rows * row_size || output.len() < num_rows * row_size {
+        return Err(crate::types::Error::ArgumentError);
+    }
+    let mask = if (0..31).contains(&shift) {
+        1i32 << shift
+    } else {
+        1i32
+    };
 
     for row in 0..num_rows {
         let in_row = &input[row * row_size..(row + 1) * row_size];
@@ -102,7 +112,7 @@ pub fn softmax_s8(
             32
         };
         let shifted_sum = if sum > 0 {
-            (sum << headroom) - (1i32 << 31)
+            (((sum as u32) << headroom) & 0x7FFF_FFFF) as i32
         } else {
             0
         };
@@ -135,7 +145,17 @@ pub fn softmax_s16(
     diff_min: i32,
     output: &mut [i16],
 ) -> Result<()> {
-    let mask = 1i32 << shift;
+    if num_rows == 0 || row_size == 0 {
+        return Ok(());
+    }
+    if input.len() < num_rows * row_size || output.len() < num_rows * row_size {
+        return Err(crate::types::Error::ArgumentError);
+    }
+    let mask = if (0..31).contains(&shift) {
+        1i32 << shift
+    } else {
+        1i32
+    };
 
     for row in 0..num_rows {
         let in_row = &input[row * row_size..(row + 1) * row_size];
@@ -164,7 +184,7 @@ pub fn softmax_s16(
             32
         };
         let shifted_sum = if sum > 0 {
-            (sum << headroom) - (1i32 << 31)
+            (((sum as u32) << headroom) & 0x7FFF_FFFF) as i32
         } else {
             0
         };

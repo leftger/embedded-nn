@@ -70,6 +70,12 @@ pub fn requantize(val: i32, multiplier: i32, shift: i32) -> i32 {
 pub fn requantize_s64(val: i64, reduced_multiplier: i32, shift: i32) -> i32 {
     let new_val = val * (reduced_multiplier as i64);
     let shift_amt = 14 - shift;
+    if shift_amt <= 0 {
+        return (new_val.wrapping_shl((-shift_amt + 1) as u32)) as i32;
+    }
+    if shift_amt >= 64 {
+        return 0;
+    }
     let mut result = (new_val >> (shift_amt - 1)) as i32;
     result = (result + 1) >> 1;
     result
