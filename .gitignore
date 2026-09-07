@@ -10,3 +10,4 @@ model.rs
 !examples/stm32wba65ri/src/model.rs
 **/model_source.rs
 **/models/model.rs
+lcov.info

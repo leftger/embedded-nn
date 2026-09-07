@@ -6,7 +6,8 @@
 
 [![crates.io](https://img.shields.io/crates/v/embedded-nn.svg)](https://crates.io/crates/embedded-nn)
 [![docs.rs](https://img.docs.rs/embedded-nn)](https://docs.rs/embedded-nn)
-[![CI](https://github.com/leftger/embedded-nn/actions/workflows/ci.yml/badge.svg)](https://github.com/leftger/embedded-nn/actions/workflows/ci.yml)
+[![CI](https://github.com/leftger/embedded-nn/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/leftger/embedded-nn/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/leftger/embedded-nn/branch/main/graph/badge.svg)](https://codecov.io/gh/leftger/embedded-nn)
 [![Live Studio WASM](https://img.shields.io/badge/Live%20Demo-TinyML%20Studio%20WASM-brightgreen)](https://leftger.github.io/embedded-nn/)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 
