@@ -233,4 +233,14 @@ mod tests {
 
         assert_eq!(output, [-64; 4]);
     }
+
+    #[test]
+    fn test_softmax_s16_and_argument_errors() {
+        let input = [100i16, 200, 300, 400];
+        let mut output = [0i16; 4];
+        softmax_s16(&input, 1, 4, 1073741824, 20, -256, &mut output).unwrap();
+        assert!(output[3] > output[0]);
+        assert!(softmax_s16(&input, 1, 4, 1073741824, 20, -256, &mut output[..3]).is_err());
+        assert!(softmax_s16(&input, 0, 4, 1073741824, 20, -256, &mut output).is_ok());
+    }
 }

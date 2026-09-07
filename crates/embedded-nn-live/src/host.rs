@@ -1027,6 +1027,60 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    fn roundtrip_owned(msg: OwnedMsg) {
+        let mut cursor = Cursor::new(Vec::new());
+        write_owned(&mut cursor, &msg, 128).unwrap();
+        cursor.set_position(0);
+        let mut decoder = Decoder::<1024>::new();
+        let got = read_owned(&mut cursor, &mut decoder, 128).unwrap();
+        assert_eq!(got, msg);
+    }
+
+    #[test]
+    fn all_owned_messages_roundtrip() {
+        roundtrip_owned(OwnedMsg::Hello {
+            proto: 1,
+            model_id: 2,
+            input_len: 3,
+            output_len: 4,
+        });
+        roundtrip_owned(OwnedMsg::RunInference {
+            seq: 7,
+            model_id: 2,
+            input: vec![1, 2, 253, 4],
+        });
+        roundtrip_owned(OwnedMsg::Ping);
+        roundtrip_owned(OwnedMsg::Ready {
+            proto: 1,
+            model_id: 2,
+            input_len: 3,
+            output_len: 4,
+            max_payload: 128,
+            cpu_hz: 100,
+        });
+        roundtrip_owned(OwnedMsg::InferenceResult {
+            seq: 7,
+            model_id: 2,
+            execution_cycles: 42,
+            execution_time_us: 10,
+            logits: vec![0, 1, 2],
+        });
+        roundtrip_owned(OwnedMsg::SensorFrame {
+            timestamp_ms: 123,
+            channel_count: 2,
+            values: vec![1, 2, 3, 4, 5, 6, 7, 8],
+        });
+        roundtrip_owned(OwnedMsg::Nack { seq: 9, code: 2 });
+        roundtrip_owned(OwnedMsg::Pong);
+        roundtrip_owned(OwnedMsg::LayerProfile {
+            seq: 5,
+            layer_idx: 1,
+            total_layers: 2,
+            execution_cycles: 99,
+            activations: vec![10, 20],
+        });
+    }
+
     #[test]
     fn framed_bytes_round_trip_through_chunked_writer() {
         let msg = OwnedMsg::RunInference {
@@ -1101,5 +1155,82 @@ mod tests {
             other => panic!("{other:?}"),
         }
         device_thread.join().unwrap();
+    }
+
+    #[test]
+    fn apply_inbound_updates_link_state() {
+        let shared = Arc::new(Shared {
+            cmds: Mutex::new(VecDeque::new()),
+            state: Mutex::new(LinkState {
+                alive: true,
+                ..Default::default()
+            }),
+            quit: AtomicBool::new(false),
+        });
+
+        apply_inbound(
+            &shared,
+            OwnedMsg::Ready {
+                proto: 1,
+                model_id: 2,
+                input_len: 1,
+                output_len: 1,
+                max_payload: 64,
+                cpu_hz: 100,
+            },
+        );
+        apply_inbound(
+            &shared,
+            OwnedMsg::SensorFrame {
+                timestamp_ms: 1,
+                channel_count: 1,
+                values: vec![1, 2, 3, 4],
+            },
+        );
+        apply_inbound(
+            &shared,
+            OwnedMsg::InferenceResult {
+                seq: 1,
+                model_id: 2,
+                execution_cycles: 3,
+                execution_time_us: 4,
+                logits: vec![5],
+            },
+        );
+        apply_inbound(&shared, OwnedMsg::Pong);
+        apply_inbound(&shared, OwnedMsg::Nack { seq: 2, code: 3 });
+
+        {
+            let state = shared.state.lock().unwrap();
+            assert!(state.handshaked);
+            assert!(state.ready.is_some());
+            assert_eq!(state.sensor_queue.len(), 1);
+            assert!(state.last_result.is_some());
+            assert!(state.error.is_some());
+        }
+    }
+
+    #[test]
+    fn device_link_missing_device_reports_error() {
+        let link = DeviceLink::connect("definitely-missing-device").unwrap();
+        let id = link.device_id();
+        assert_eq!(id, "definitely-missing-device");
+        link.ping();
+        link.infer(1, 1, vec![1]);
+
+        let mut saw_error = false;
+        for _ in 0..100 {
+            if link.take_error().is_some() {
+                saw_error = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(saw_error || !link.is_alive());
+        let _ = link.is_handshaked();
+        let _ = link.ready_info();
+        let _ = link.drain_sensors();
+        let _ = link.take_sensor();
+        let _ = link.take_result();
     }
 }

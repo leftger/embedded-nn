@@ -777,4 +777,109 @@ mod tests {
         let out = host.run(&[&[1, 2, 3, 4]]).unwrap();
         assert_eq!(out[0].len(), 1);
     }
+
+    #[test]
+    fn interpreter_reports_missing_outputs_and_validation_errors() {
+        let builder = ModelBuilder::new("no_output");
+        let graph = builder.build();
+        assert!(matches!(
+            HostInterpreter::new(&graph),
+            Err(InterpreterError::NoOutputs)
+        ));
+
+        let mut builder = ModelBuilder::new("bad_dtype");
+        let input = builder.add_input(
+            "input",
+            TensorShape::new_1d(2),
+            DataType::Float32,
+            Some(identity_quant()),
+        );
+        builder.mark_output(input);
+        let graph = builder.build();
+        assert!(matches!(
+            HostInterpreter::new(&graph),
+            Err(InterpreterError::UnsupportedDataType { .. })
+        ));
+
+        let mut builder = ModelBuilder::new("dense");
+        let input = builder.add_input(
+            "input",
+            TensorShape::new_1d(2),
+            DataType::Int8,
+            Some(identity_quant()),
+        );
+        let output = builder.add_dense_layer(
+            "out",
+            input,
+            1,
+            vec![1, 1],
+            None,
+            Some(vec![0]),
+            ActivationType::None,
+            None,
+            Some(identity_quant()),
+        );
+        builder.mark_output(output);
+        let graph = builder.build();
+        let mut host = HostInterpreter::new(&graph).unwrap();
+        assert!(host.run(&[]).is_err());
+        assert!(host.run(&[&[1, 2, 3]]).is_err());
+        assert!(host.arena_plan().total_arena_bytes > 0);
+        host.reset_external_state();
+    }
+
+    #[test]
+    fn interpreter_runs_conv_pool_and_concat_graphs() {
+        let mut builder = ModelBuilder::new("conv_pool");
+        let input = builder.add_input(
+            "input",
+            TensorShape::new_4d(1, 2, 2, 1),
+            DataType::Int8,
+            Some(identity_quant()),
+        );
+        let conv = builder.add_conv2d_layer(
+            "conv",
+            input,
+            1,
+            2,
+            2,
+            1,
+            1,
+            crate::ir::Padding2D::default(),
+            1,
+            1,
+            vec![1, 1, 1, 1],
+            None,
+            None,
+            ActivationType::None,
+            None,
+            Some(identity_quant()),
+        );
+        let pool =
+            builder.add_maxpool2d_layer("pool", conv, 1, 1, 1, 1, crate::ir::Padding2D::default());
+        builder.mark_output(pool);
+        let graph = builder.build();
+        let mut host = HostInterpreter::new(&graph).unwrap();
+        let out = host.run(&[&[1, 2, 3, 4]]).unwrap();
+        assert_eq!(out[0], vec![10]);
+
+        let mut builder = ModelBuilder::new("concat");
+        let a = builder.add_input(
+            "a",
+            TensorShape::new_1d(1),
+            DataType::Int8,
+            Some(identity_quant()),
+        );
+        let b = builder.add_input(
+            "b",
+            TensorShape::new_1d(1),
+            DataType::Int8,
+            Some(identity_quant()),
+        );
+        let cat = builder.add_concat_layer("cat", a, b).unwrap();
+        builder.mark_output(cat);
+        let graph = builder.build();
+        let mut host = HostInterpreter::new(&graph).unwrap();
+        assert_eq!(host.run(&[&[1], &[2]]).unwrap(), vec![vec![1, 2]]);
+    }
 }

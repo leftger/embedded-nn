@@ -783,4 +783,76 @@ mod tests {
         let out = max_pool2d_forward::<1, 4, 4, 1, 2, 2, 2, 2>(&input, &pool_params).unwrap();
         assert_eq!(out.data, [[[[6], [8]], [[9], [6]]]]);
     }
+
+    #[test]
+    fn test_avg_pool2d_forward() {
+        let input = Tensor4D::<i8, 1, 2, 2, 1>::new([[[[2], [4]], [[6], [8]]]], [1.0], [0]);
+        let pool_params = PoolParams {
+            stride: Tile::new(2, 2),
+            padding: Padding2D::new(0, 0, 0, 0),
+            activation: Activation::int8_unconstrained(),
+        };
+        let out = avg_pool2d_forward::<1, 2, 2, 1, 2, 2, 1, 1>(&input, &pool_params).unwrap();
+        assert_eq!(out.data[0][0][0][0], 5);
+    }
+
+    #[test]
+    fn test_fully_connected_forward() {
+        let input = Tensor2D::<i8, 1, 2>::new([[1, 2]], [1.0], [0]);
+        let weights = Tensor2D::<i8, 2, 2>::new([[1, 0], [0, 1]], [1.0], [0]);
+        let out = fully_connected_forward::<1, 2, 2>(
+            &input,
+            &weights,
+            None,
+            1.0,
+            0,
+            FusedActivation::Relu,
+            1_073_741_824,
+            1,
+        )
+        .unwrap();
+        assert_eq!(out.data, [[1, 2]]);
+    }
+
+    #[test]
+    fn test_conv2d_forward_per_channel() {
+        let input = Tensor4D::<i8, 1, 1, 1, 1>::new([[[[2]]]], [1.0], [0]);
+        let kernel = Tensor4D::<i8, 1, 1, 1, 1, 1>::new([[[[3]]]], [1.0], [0]);
+        let conv_params = ConvParams {
+            input_offset: 0,
+            output_offset: 0,
+            stride: Tile::new(1, 1),
+            padding: Padding2D::new(0, 0, 0, 0),
+            dilation: Tile::new(1, 1),
+            activation: Activation::int8_unconstrained(),
+        };
+        let pcq = PerChannelQuantParams::new(&[1_073_741_824], &[1]);
+        let out = conv2d_forward::<1, 1, 1, 1, 1, 1, 1, 1, 1, 1>(
+            &input,
+            &kernel,
+            None,
+            &conv_params,
+            Some(&pcq),
+            None,
+            1.0,
+            0,
+        )
+        .unwrap();
+        assert_eq!(out.data[0][0][0][0], 6);
+    }
+
+    #[test]
+    fn test_softmax_relu_and_relu6_forward() {
+        let input = Tensor2D::<i8, 1, 3>::new([[10, 0, -10]], [1.0 / 256.0], [-128]);
+        let soft = softmax_forward::<1, 3>(&input, 1_073_741_824, 1, -128).unwrap();
+        assert_eq!(soft.data.len(), 1);
+
+        let relu_in = Tensor2D::<i8, 1, 3>::new([[-1, 0, 5]], [0.5], [-1]);
+        let relu = relu_forward(&relu_in);
+        assert!(relu.data[0].iter().all(|&v| v >= -1));
+
+        let relu6_in = Tensor2D::<i8, 1, 3>::new([[10, 0, -10]], [0.5], [0]);
+        let relu6 = relu6_forward(&relu6_in);
+        assert!(relu6.data[0].iter().all(|&v| v <= 12));
+    }
 }

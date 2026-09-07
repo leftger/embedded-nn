@@ -424,4 +424,48 @@ mod tests {
             "int gesturemodel_predict(const int8_t* input, int8_t* output, uint8_t* arena)"
         ));
     }
+
+    #[test]
+    fn test_c_code_generator_conv_pool() {
+        let mut builder = ModelBuilder::new("ConvPoolModel");
+        let quant = QuantParams {
+            multiplier: 1073741824,
+            shift: 0,
+            zero_point: 0,
+            scale: 1.0,
+        };
+        let in_id = builder.add_input(
+            "in",
+            TensorShape::new_4d(1, 2, 2, 1),
+            DataType::Int8,
+            Some(quant.clone()),
+        );
+        let conv_id = builder.add_conv2d_layer(
+            "conv",
+            in_id,
+            1,
+            2,
+            2,
+            1,
+            1,
+            Padding2D::default(),
+            1,
+            1,
+            vec![1, 1, 1, 1],
+            None,
+            None,
+            ActivationType::None,
+            None,
+            Some(quant),
+        );
+        let pool_id =
+            builder.add_maxpool2d_layer("pool", conv_id, 1, 1, 1, 1, Padding2D::default());
+        builder.mark_output(pool_id);
+
+        let graph = builder.build();
+        let generator = CCodeGenerator::new("ConvPoolModel");
+        let c_code = generator.generate(&graph);
+        assert!(c_code.contains("#define CONVPOOLMODEL_INPUT_SHAPE_H 2"));
+        assert!(c_code.contains("convpoolmodel_predict"));
+    }
 }

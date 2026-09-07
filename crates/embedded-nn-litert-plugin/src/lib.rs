@@ -250,4 +250,99 @@ mod tests {
             LiteRtDestroyCompilerPlugin(plugin);
         }
     }
+
+    #[test]
+    fn test_plugin_invalid_args_and_result_bytecode_access() {
+        let mut version = LiteRtApiVersion {
+            major: 0,
+            minor: 0,
+            patch: 0,
+        };
+        assert_eq!(
+            unsafe { LiteRtGetCompilerPluginVersion(std::ptr::null_mut()) },
+            LiteRtStatus::ErrorInvalidArgument
+        );
+        assert_eq!(
+            unsafe { LiteRtGetCompilerPluginVersion(&mut version) },
+            LiteRtStatus::Ok
+        );
+
+        let mut plugin: *mut c_void = std::ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                LiteRtCreateCompilerPlugin(
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            },
+            LiteRtStatus::ErrorInvalidArgument
+        );
+        assert_eq!(
+            unsafe {
+                LiteRtCreateCompilerPlugin(
+                    std::ptr::null(),
+                    &mut plugin,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            },
+            LiteRtStatus::Ok
+        );
+
+        let mut hw = 0u64;
+        assert_eq!(
+            unsafe { LiteRtGetCompilerPluginSupportedHardware(plugin, std::ptr::null_mut()) },
+            LiteRtStatus::ErrorInvalidArgument
+        );
+        assert_eq!(
+            unsafe { LiteRtGetCompilerPluginSupportedHardware(plugin, &mut hw) },
+            LiteRtStatus::Ok
+        );
+
+        let mut num_models = 0usize;
+        assert_eq!(
+            unsafe { LiteRtGetNumCompilerPluginSupportedSocModels(plugin, std::ptr::null_mut()) },
+            LiteRtStatus::ErrorInvalidArgument
+        );
+        assert_eq!(
+            unsafe { LiteRtGetNumCompilerPluginSupportedSocModels(plugin, &mut num_models) },
+            LiteRtStatus::Ok
+        );
+
+        let mut model: *const c_char = std::ptr::null();
+        assert_eq!(
+            unsafe { LiteRtGetCompilerPluginSupportedSocModel(plugin, 99, &mut model) },
+            LiteRtStatus::ErrorInvalidArgument
+        );
+        assert_eq!(
+            unsafe { LiteRtGetCompilerPluginSupportedSocModel(plugin, 6, &mut model) },
+            LiteRtStatus::Ok
+        );
+
+        unsafe {
+            LiteRtDestroyCompilerPlugin(plugin);
+            LiteRtDestroyCompilerPlugin(std::ptr::null_mut());
+        }
+
+        let artifact = Box::into_raw(Box::new(CompiledArtifact {
+            bytecode: vec![1, 2, 3],
+        })) as *mut c_void;
+        let mut data: *const c_void = std::ptr::null();
+        let mut size = 0usize;
+        assert_eq!(
+            unsafe { LiteRtGetCompiledResultByteCode(artifact, 1, &mut data, &mut size) },
+            LiteRtStatus::ErrorInvalidArgument
+        );
+        assert_eq!(
+            unsafe { LiteRtGetCompiledResultByteCode(artifact, 0, &mut data, &mut size) },
+            LiteRtStatus::Ok
+        );
+        assert_eq!(size, 3);
+        unsafe {
+            LiteRtDestroyCompiledResult(artifact);
+            LiteRtDestroyCompiledResult(std::ptr::null_mut());
+        }
+    }
 }

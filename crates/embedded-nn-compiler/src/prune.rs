@@ -372,4 +372,45 @@ mod tests {
         let out1 = graph.tensors.iter().find(|t| t.id == fc1_out).unwrap();
         assert_eq!(out1.shape.channels, 2);
     }
+
+    #[test]
+    fn test_prune_graph_l1_and_no_candidate() {
+        let mut builder = ModelBuilder::new("prunable");
+        let in_id = builder.add_input("in", TensorShape::new_1d(2), DataType::Int8, None);
+        let fc1 = builder.add_dense_layer(
+            "fc1",
+            in_id,
+            2,
+            vec![1, 1, 1, 1],
+            None,
+            Some(vec![0, 0]),
+            ActivationType::Relu,
+            None,
+            None,
+        );
+        let _fc2 = builder.add_dense_layer(
+            "fc2",
+            fc1,
+            2,
+            vec![1, 1, 1, 1],
+            None,
+            Some(vec![0, 0]),
+            ActivationType::None,
+            None,
+            None,
+        );
+        let mut graph = builder.build();
+        let reports = prune_graph_l1(&mut graph, 1);
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].old_hidden_dim, 2);
+        assert_eq!(reports[0].new_hidden_dim, 1);
+
+        let mut builder = ModelBuilder::new("no_fc");
+        let input = builder.add_input("in", TensorShape::new_1d(2), DataType::Int8, None);
+        builder.mark_output(input);
+        let graph = builder.build();
+        assert!(find_lightest_fc_neuron(&graph).is_err());
+        let mut graph = graph;
+        assert!(prune_graph_l1(&mut graph, 2).is_empty());
+    }
 }

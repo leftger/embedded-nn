@@ -20,6 +20,18 @@ fn test_gaussian_naive_bayes() {
     let mut probs = [0.0f32; 2];
     let cls = gnb.predict(&[4.8, 5.1], &mut probs);
     assert_eq!(cls, 1);
+
+    let zero_priors = [0.0f32, 1.0];
+    let gnb_zero = GaussianNaiveBayesInstanceF32 {
+        num_classes: 2,
+        num_features: 2,
+        theta: &theta,
+        sigma: &sigma,
+        class_prior: &zero_priors,
+        epsilon: 1e-9,
+    };
+    let mut probs = [0.0f32; 2];
+    assert_eq!(gnb_zero.predict(&[0.0, 0.0], &mut probs), 1);
 }
 
 #[test]
@@ -42,6 +54,47 @@ fn test_svm_classifier() {
     let mut res = 0;
     assert!(svm.predict(&[3.0, 3.0], &mut res).is_ok());
     assert_eq!(res, 1);
+}
+
+#[test]
+fn test_svm_all_kernel_types_and_input_validation() {
+    let sv = [0.0f32, 0.0, 2.0, 2.0];
+    let dual_coefs = [-1.0f32, 1.0];
+
+    for kernel_type in [
+        SvmKernelType::Linear,
+        SvmKernelType::Polynomial,
+        SvmKernelType::Rbf,
+        SvmKernelType::Sigmoid,
+    ] {
+        let svm = SvmInstanceF32 {
+            num_vector_dim: 2,
+            num_support_vectors: 2,
+            intercept: 0.0,
+            dual_coefs: &dual_coefs,
+            support_vectors: &sv,
+            kernel_type,
+            gamma: 0.5,
+            coef0: 0.0,
+            degree: 2,
+        };
+        let mut res = 0;
+        assert!(svm.predict(&[3.0, 3.0], &mut res).is_ok());
+    }
+
+    let svm = SvmInstanceF32 {
+        num_vector_dim: 2,
+        num_support_vectors: 2,
+        intercept: 0.0,
+        dual_coefs: &dual_coefs,
+        support_vectors: &sv,
+        kernel_type: SvmKernelType::Rbf,
+        gamma: 0.5,
+        coef0: 0.0,
+        degree: 2,
+    };
+    let mut res = 0;
+    assert!(svm.predict(&[1.0], &mut res).is_err());
 }
 
 #[test]
