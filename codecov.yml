@@ -1,7 +1,11 @@
 ignore:
   - "embedded-nn-cli/**"
+  - "crates/embedded-nn-cli/**"
   - "embedded-nn-studio/**"
+  - "crates/embedded-nn-studio/**"
   - "embedded-nn-tflite/schema/**"
+  - "crates/embedded-nn-tflite/schema/**"
+  - "**/schema_generated.rs"
   - "examples/**"
   - "analysis/**"
   - "assets/**"
