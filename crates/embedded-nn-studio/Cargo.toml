@@ -38,4 +38,4 @@ web-sys = { version = "0.3", features = [
     "UsbControlTransferParameters", "UsbInTransferResult", "UsbOutTransferResult",
     "UsbConfiguration", "UsbInterface", "UsbAlternateInterface", "UsbEndpoint"
 ] }
-getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom = { version = "0.4", features = ["wasm_js"] }
