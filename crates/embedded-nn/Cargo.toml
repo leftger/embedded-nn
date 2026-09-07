@@ -16,7 +16,18 @@ alloc = []
 float = []
 simd = []
 libm = ["dep:libm"]
-dsp = ["dep:embedded-dsp", "libm"]
+dsp = [
+    "dep:embedded-dsp",
+    "embedded-dsp/complex-math",
+    "embedded-dsp/fast-math",
+    "embedded-dsp/filter-analysis",
+    "embedded-dsp/filter-design",
+    "embedded-dsp/filtering",
+    "embedded-dsp/support",
+    "embedded-dsp/transform",
+    "embedded-dsp/window",
+    "libm",
+]
 
 [dependencies]
 libm = { workspace = true, optional = true }

@@ -54,8 +54,9 @@ impl Default for EmbeddedNnStudioApp {
 }
 
 impl eframe::App for EmbeddedNnStudioApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::TopBottomPanel::top("studio_top_header").show(ctx, |ui| {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        egui::Panel::top("studio_top_header").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("⚡ embedded-nn studio");
                 ui.label("• Embedded TinyML Platform");
@@ -215,7 +216,8 @@ impl eframe::App for EmbeddedNnStudioApp {
                     .raw
                     .dropped_files
                     .iter()
-                    .filter_map(|f| f.path.clone())
+                    .map(|f| f.path().to_path_buf())
+                    .filter(|p| !p.as_os_str().is_empty())
                     .collect();
                 if !paths.is_empty() {
                     let mut dataset_paths = Vec::new();
@@ -240,12 +242,12 @@ impl eframe::App for EmbeddedNnStudioApp {
                         match self.state.import_dataset_paths(&dataset_paths) {
                             Ok(n) => {
                                 self.ingest_view.import_status =
-                                    format!("Imported {n} sample(s) from drag-and-drop.");
+                                    format!("Imported {n} sample(s) via Drag & Drop.");
                                 self.current_tab = StudioTab::Ingest;
                             }
                             Err(e) => {
                                 self.ingest_view.import_status =
-                                    format!("Drag-and-drop import error: {e}");
+                                    format!("Import Drag & Drop error: {e}");
                             }
                         }
                     }
@@ -257,7 +259,7 @@ impl eframe::App for EmbeddedNnStudioApp {
         // so the 3D gesture view sees a live trajectory too.
         self.ingest_view.poll_device(&self.device_link);
 
-        egui::CentralPanel::default().show(ctx, |ui| match self.current_tab {
+        egui::CentralPanel::default().show(ui, |ui| match self.current_tab {
             StudioTab::Ingest => self
                 .ingest_view
                 .show(ui, &mut self.state, &mut self.device_link),

@@ -5,6 +5,7 @@ use burn::nn::loss::CrossEntropyLossConfig;
 use burn::nn::{Linear, LinearConfig};
 use burn::optim::{AdamConfig, GradientsParams, Optimizer};
 use burn::tensor::backend::Backend;
+use burn::tensor::ops::Device;
 use burn::tensor::{Int, Tensor, TensorData};
 use embedded_nn_compiler::ir::ModelGraph;
 
@@ -113,12 +114,7 @@ struct Mlp<B: Backend> {
 }
 
 impl Mlp<TrainB> {
-    fn new(
-        num_inputs: usize,
-        hidden: usize,
-        num_classes: usize,
-        device: &<TrainB as Backend>::Device,
-    ) -> Self {
+    fn new(num_inputs: usize, hidden: usize, num_classes: usize, device: &Device<TrainB>) -> Self {
         Self {
             fc1: LinearConfig::new(num_inputs, hidden).init(device),
             fc2: LinearConfig::new(hidden, num_classes).init(device),

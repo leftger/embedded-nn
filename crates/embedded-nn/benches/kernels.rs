@@ -1,7 +1,9 @@
 //! Benchmarks for the hot-path quantized inference kernels, using shapes representative of
 //! Studio's default TinyML config (16 mel-bin input, 16 hidden units, 4 output classes).
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use embedded_nn::{
     Activation, ConvParams, Dims, FcParams, Padding2D, PerChannelQuantParams, PerTensorQuantParams,
     Tile, convolve_1_x_n_s8, fully_connected_per_channel_s8, fully_connected_s8, requantize,

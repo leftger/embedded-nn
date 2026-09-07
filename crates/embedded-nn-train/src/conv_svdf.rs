@@ -4,7 +4,7 @@ use burn::nn::conv::{Conv1d, Conv1dConfig};
 use burn::nn::loss::CrossEntropyLossConfig;
 use burn::nn::{Linear, LinearConfig};
 use burn::optim::{AdamConfig, GradientsParams, Optimizer};
-use burn::tensor::backend::Backend;
+use burn::tensor::ops::Device;
 use burn::tensor::{Int, Tensor, TensorData};
 use embedded_nn_compiler::HostInterpreter;
 use embedded_nn_compiler::builder::ModelBuilder;
@@ -35,7 +35,7 @@ impl ConvNet {
         out_ch: usize,
         hidden: usize,
         classes: usize,
-        device: &<TrainB as Backend>::Device,
+        device: &Device<TrainB>,
     ) -> Self {
         let out_w = frames - kernel_w + 1;
         Self {
@@ -594,7 +594,7 @@ impl SvdfNet {
         memory: usize,
         units: usize,
         classes: usize,
-        device: &<TrainB as Backend>::Device,
+        device: &Device<TrainB>,
     ) -> Self {
         Self {
             feature: LinearConfig::new(mel, feature_dim).init(device),

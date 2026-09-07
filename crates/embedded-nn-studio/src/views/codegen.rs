@@ -501,10 +501,10 @@ impl CodegenView {
                 });
                 ui.separator();
 
-                let mut layouter = |ui: &egui::Ui, text: &str, wrap_width: f32| {
-                    let mut layout_job = highlight_rust(ui.ctx(), text);
+                let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
+                    let mut layout_job = highlight_rust(ui.ctx(), text.as_str());
                     layout_job.wrap.max_width = wrap_width;
-                    ui.fonts(|f| f.layout_job(layout_job))
+                    ui.fonts_mut(|f| f.layout_job(layout_job))
                 };
 
                 let mut displayed_code = match self.selected_lang {

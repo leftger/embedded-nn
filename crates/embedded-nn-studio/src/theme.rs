@@ -3,9 +3,8 @@
 use eframe::egui;
 
 pub fn configure_theme(ctx: &egui::Context) {
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
 
-    style.visuals.dark_mode = true;
     style.visuals.override_text_color = Some(egui::Color32::from_rgb(225, 235, 245));
 
     style.visuals.window_fill = egui::Color32::from_rgb(16, 19, 26);
@@ -29,5 +28,5 @@ pub fn configure_theme(ctx: &egui::Context) {
 
     style.visuals.selection.bg_fill = egui::Color32::from_rgb(60, 110, 190);
 
-    ctx.set_style(style);
+    ctx.set_style_of(egui::Theme::Dark, style);
 }

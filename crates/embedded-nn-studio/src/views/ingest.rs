@@ -272,7 +272,7 @@ impl IngestView {
     ) {
         // Spacebar shortcut to start/stop burst capture when no text input is active
         let space_pressed = ui.input(|i| i.key_pressed(egui::Key::Space));
-        let wants_keyboard = ui.ctx().wants_keyboard_input();
+        let wants_keyboard = ui.ctx().egui_wants_keyboard_input();
         if space_pressed && !wants_keyboard {
             if self.is_recording {
                 self.commit_recording(state);
@@ -771,12 +771,11 @@ mod tests {
             )),
             ..Default::default()
         };
-        let output = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let mut device_link = None;
-                view.show(ui, &mut state, &mut device_link)
-            });
+        let mut output = ctx.run_ui(input, |ui| {
+            let mut device_link = None;
+            view.show(ui, &mut state, &mut device_link);
         });
+        output.textures_delta.clear();
 
         let mut painted = String::new();
         collect_text(output.shapes.iter().map(|c| &c.shape), &mut painted);
@@ -878,12 +877,11 @@ mod tests {
             )),
             ..Default::default()
         };
-        let _ = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let mut device_link = None;
-                view.show(ui, &mut state, &mut device_link);
-            });
+        let mut output = ctx.run_ui(input, |ui| {
+            let mut device_link = None;
+            view.show(ui, &mut state, &mut device_link);
         });
+        output.textures_delta.clear();
 
         assert!(
             !view.is_recording,
@@ -906,12 +904,11 @@ mod tests {
             )),
             ..Default::default()
         };
-        let output = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let mut device_link = None;
-                view.show(ui, &mut state, &mut device_link);
-            });
+        let mut output = ctx.run_ui(input, |ui| {
+            let mut device_link = None;
+            view.show(ui, &mut state, &mut device_link);
         });
+        output.textures_delta.clear();
 
         let mut painted = String::new();
         collect_text(output.shapes.iter().map(|c| &c.shape), &mut painted);
