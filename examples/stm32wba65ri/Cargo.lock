@@ -686,9 +686,9 @@ dependencies = [
 
 [[package]]
 name = "embedded-dsp"
-version = "0.2.2"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c1da00f04633e55be040e0ce4b1e70db382a6965447d2f33196d998e96a85fd"
+checksum = "3646c811179ee0966f5e24aba8aa07aaaa4208bee60c20b86bd4bf37360e2c1f"
 dependencies = [
  "libm",
 ]
@@ -811,7 +811,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde",
- "syn 2.0.119",
+ "syn 3.0.3",
  "thiserror",
 ]
 
@@ -838,7 +838,7 @@ dependencies = [
  "embedded-nn-tflite",
  "proc-macro2",
  "serde_json",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
