@@ -1,0 +1,19 @@
+ignore:
+  - "embedded-nn-cli/**"
+  - "embedded-nn-studio/**"
+  - "embedded-nn-tflite/schema/**"
+  - "examples/**"
+  - "analysis/**"
+  - "assets/**"
+  - "docs/**"
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: 60%
+        threshold: 1%

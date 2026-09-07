@@ -92,4 +92,32 @@ mod tests {
         transpose_2d_s8(2, 3, &input, &mut out).unwrap();
         assert_eq!(out, [1, 4, 2, 5, 3, 6]);
     }
+
+    #[test]
+    fn test_transpose_spatial_s8_hw_swap() {
+        // 1 batch, 2x3 spatial, 1 channel => [1,2,3,4,5,6].
+        let dims = Dims::new(1, 2, 3, 1);
+        let input = [1i8, 2, 3, 4, 5, 6];
+        let mut out = [0i8; 6];
+        transpose_spatial_s8(&dims, &input, &mut out).unwrap();
+        // Transposed to 1x3x2: row-major 2 rows of 3 -> 3 rows of 2.
+        assert_eq!(out, [1, 4, 2, 5, 3, 6]);
+    }
+
+    #[test]
+    fn test_transpose_nd_rank2_permutation() {
+        let input = [1i8, 2, 3, 4, 5, 6];
+        let mut out = [0i8; 6];
+        transpose_nd_s8(&[2, 3], &[1, 0], &input, &mut out).unwrap();
+        assert_eq!(out, [1, 4, 2, 5, 3, 6]);
+    }
+
+    #[test]
+    fn test_transpose_nd_rejects_invalid_permutation() {
+        let input = [1i8, 2, 3, 4];
+        let mut out = [0i8; 4];
+        assert!(transpose_nd_s8(&[2, 2], &[0, 0], &input, &mut out).is_err());
+        assert!(transpose_nd_s8(&[2, 2], &[2], &input, &mut out).is_err());
+        assert!(transpose_nd_s8(&[2], &[0], &[1], &mut out).is_err());
+    }
 }
