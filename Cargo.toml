@@ -24,7 +24,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.2"
 edition = "2024"
 rust-version = "1.98"
 authors = ["Gerzain Mata <leftger@gmail.com>"]
@@ -33,13 +33,13 @@ repository = "https://github.com/leftger/embedded-nn"
 readme = "README.md"
 
 [workspace.dependencies]
-embedded-nn = { path = "crates/embedded-nn", default-features = false }
-embedded-nn-compiler = { path = "crates/embedded-nn-compiler" }
-embedded-nn-codegen = { path = "crates/embedded-nn-codegen" }
-embedded-nn-macros = { path = "crates/embedded-nn-macros" }
-embedded-nn-live = { path = "crates/embedded-nn-live" }
-embedded-nn-tflite = { path = "crates/embedded-nn-tflite" }
-embedded-nn-train = { path = "crates/embedded-nn-train" }
+embedded-nn = { path = "crates/embedded-nn", version = "0.2.2", default-features = false }
+embedded-nn-compiler = { path = "crates/embedded-nn-compiler", version = "0.2.2" }
+embedded-nn-codegen = { path = "crates/embedded-nn-codegen", version = "0.2.2" }
+embedded-nn-macros = { path = "crates/embedded-nn-macros", version = "0.2.2" }
+embedded-nn-live = { path = "crates/embedded-nn-live", version = "0.2.2" }
+embedded-nn-tflite = { path = "crates/embedded-nn-tflite", version = "0.2.2" }
+embedded-nn-train = { path = "crates/embedded-nn-train", version = "0.2.2" }
 
 libm = { version = "0.2.11" }
 serde = { version = "1.0", default-features = false, features = ["derive"] }

@@ -2645,7 +2645,7 @@ dependencies = [
 
 [[package]]
 name = "embedded-nn"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "criterion",
  "embedded-dsp",
@@ -2654,7 +2654,7 @@ dependencies = [
 
 [[package]]
 name = "embedded-nn-cli"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "clap",
  "embedded-nn-codegen",
@@ -2667,7 +2667,7 @@ dependencies = [
 
 [[package]]
 name = "embedded-nn-codegen"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "embedded-nn",
  "embedded-nn-compiler",
@@ -2680,7 +2680,7 @@ dependencies = [
 
 [[package]]
 name = "embedded-nn-compiler"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "criterion",
  "embedded-nn",
@@ -2691,7 +2691,7 @@ dependencies = [
 
 [[package]]
 name = "embedded-nn-litert-plugin"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "embedded-nn-codegen",
  "embedded-nn-compiler",
@@ -2701,7 +2701,7 @@ dependencies = [
 
 [[package]]
 name = "embedded-nn-live"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "nusb",
  "serde",
@@ -2711,7 +2711,7 @@ dependencies = [
 
 [[package]]
 name = "embedded-nn-macros"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "embedded-nn",
  "embedded-nn-codegen",
@@ -2724,7 +2724,7 @@ dependencies = [
 
 [[package]]
 name = "embedded-nn-studio"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "eframe",
  "egui_extras",
@@ -2747,7 +2747,7 @@ dependencies = [
 
 [[package]]
 name = "embedded-nn-tflite"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "embedded-nn",
  "embedded-nn-codegen",
@@ -2758,7 +2758,7 @@ dependencies = [
 
 [[package]]
 name = "embedded-nn-train"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "burn",
  "embedded-nn-compiler",

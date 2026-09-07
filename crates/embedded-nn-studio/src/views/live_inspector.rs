@@ -2,7 +2,24 @@
 
 use eframe::egui::{self, Color32, ProgressBar, Rect, Stroke, Vec2};
 use embedded_nn_live::host::{DeviceLink, UsbBridge};
-use std::time::Instant;
+
+fn now_secs() -> f64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::time::SystemTime;
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window()
+            .and_then(|w| w.performance())
+            .map(|p| p.now() / 1000.0)
+            .unwrap_or(0.0)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct LayerBenchmark {
@@ -17,7 +34,7 @@ pub struct LiveInspectorView {
     pub selected_device: Option<String>,
     pub available_devices: Vec<UsbBridge>,
     pub is_connected: bool,
-    pub last_poll: Instant,
+    pub last_poll: f64,
     pub live_logits: Vec<f32>,
     pub class_names: Vec<String>,
     pub layer_benchmarks: Vec<LayerBenchmark>,
@@ -83,7 +100,7 @@ impl Default for LiveInspectorView {
             selected_device: None,
             available_devices: Vec::new(),
             is_connected: true, // Defaults to ready simulated state
-            last_poll: Instant::now(),
+            last_poll: now_secs(),
             live_logits: vec![0.92, 0.08],
             class_names: vec!["Gesture: Swipe Left".into(), "Gesture: Swipe Right".into()],
             layer_benchmarks: demo_layers,

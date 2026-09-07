@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "TensorFlow Lite (.tflite) FlatBuffers importer for embedded-nn"
+publish = false
 include = ["/src/**", "/schema/**", "/tests/**", "/fixtures/**", "/Cargo.toml"]
 
 [features]

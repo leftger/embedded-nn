@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "LiteRT AOT Compiler Plugin implementation for embedded-nn (targeting ARM Cortex-M and embedded MCUs)"
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]

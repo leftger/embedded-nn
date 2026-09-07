@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Gerzain Mata <leftger@gmail.com>"]
 description = "6-DOF IMU gesture recognition on embedded-nn"
+publish = false
 
 [dependencies]
 embedded-nn = { path = "../../crates/embedded-nn", default-features = false, features = ["libm"] }
