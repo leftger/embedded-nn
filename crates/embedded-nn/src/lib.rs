@@ -83,6 +83,13 @@ pub use ml::{
     mel_to_hz, mfcc_f32,
 };
 
+#[cfg(feature = "dsp")]
+pub use feature_dsp::{
+    DEFAULT_MEL_ENERGY_FLOOR, FeatureDspConfig, FeatureDspError, MAX_CAPTURE, MAX_MEL_BINS,
+    MAX_WINDOW, MicroAudioFrontend, PcanConfig, WindowKind, extract_mel_sequence,
+    extract_mel_sequence_i16, quantize_mel_s8,
+};
+
 pub use support::{
     clamp, dequantize_s8_to_f32, dequantize_s16_to_f32, divide_by_power_of_two,
     doubling_high_mult_no_sat, pack_q15x2_32x1, pack_s8x4_32x1, quantize_f32_to_s8,

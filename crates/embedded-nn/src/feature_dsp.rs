@@ -66,6 +66,33 @@ pub enum FeatureDspError {
     OutputTooSmall,
 }
 
+/// Per-Channel Energy Normalization (PCAN) AGC configuration.
+///
+/// Implements automatic gain control and adaptive background noise suppression
+/// inspired by TensorFlow Lite Micro (`tflite-micro/signal/src/pcan_argc_fixed.h`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PcanConfig {
+    /// Smoothing factor for running noise floor estimation: `0.0 < alpha < 1.0` (typically 0.05).
+    pub smoothing_alpha: f32,
+    /// Gain compression exponent: `gamma` (typically 0.5 for square-root or 0.32).
+    pub strength: f32,
+    /// Offset added to noise estimate to prevent division by zero (typically 1.0).
+    pub offset: f32,
+    /// Multiplicative output scale factor.
+    pub gain: f32,
+}
+
+impl Default for PcanConfig {
+    fn default() -> Self {
+        Self {
+            smoothing_alpha: 0.05,
+            strength: 0.5,
+            offset: 1.0,
+            gain: 1.0,
+        }
+    }
+}
+
 impl FeatureDspConfig {
     /// Number of analysis frames produced for `capture_samples`.
     pub fn num_frames(&self) -> usize {
@@ -187,6 +214,146 @@ pub fn quantize_mel_s8(values: &[f32], scale: f32, out: &mut [i8]) {
     }
 }
 
+/// Fills `out` with `num_frames * num_mel_bins` Mel energies from 16-bit PCM input.
+pub fn extract_mel_sequence_i16(
+    config: &FeatureDspConfig,
+    pcm: &[i16],
+    out: &mut [f32],
+) -> core::result::Result<usize, FeatureDspError> {
+    let mut float_raw = [0.0f32; MAX_CAPTURE];
+    let copy = pcm.len().min(config.capture_samples.min(MAX_CAPTURE));
+    for i in 0..copy {
+        float_raw[i] = pcm[i] as f32 / 32768.0;
+    }
+    extract_mel_sequence(config, &float_raw[..copy], out)
+}
+
+/// Micro audio frontend for embedded keyword spotting and audio classification.
+///
+/// Bridges microphone PCM streams (`i16` / `f32`) directly to quantized `s8` feature matrices
+/// compatible with TensorFlow Lite Micro and LiteRT speech models.
+#[derive(Debug, Clone)]
+pub struct MicroAudioFrontend {
+    /// DSP window and filterbank configuration.
+    pub config: FeatureDspConfig,
+    /// Optional PCAN (Per-Channel Energy Normalization) automatic gain control.
+    pub pcan: Option<PcanConfig>,
+    /// Whether to apply log-mel compression (`ln(1 + E)`) instead of linear normalization.
+    pub log_mel: bool,
+    noise_floor: [f32; MAX_MEL_BINS],
+}
+
+impl MicroAudioFrontend {
+    /// Creates a new frontend with the given DSP configuration.
+    pub fn new(config: FeatureDspConfig) -> Self {
+        Self {
+            config,
+            pcan: None,
+            log_mel: false,
+            noise_floor: [0.0; MAX_MEL_BINS],
+        }
+    }
+
+    /// Enables PCAN automatic gain control with the specified configuration.
+    pub fn with_pcan(mut self, pcan: PcanConfig) -> Self {
+        self.pcan = Some(pcan);
+        self
+    }
+
+    /// Enables or disables logarithmic Mel energy compression (`ln(1 + E)`).
+    pub fn with_log_mel(mut self, log_mel: bool) -> Self {
+        self.log_mel = log_mel;
+        self
+    }
+
+    /// Resets the internal running noise floor estimate.
+    pub fn reset(&mut self) {
+        self.noise_floor = [0.0; MAX_MEL_BINS];
+    }
+
+    /// Processes raw `f32` input waveform and extracts Mel features.
+    pub fn process_f32(
+        &mut self,
+        raw: &[f32],
+        out: &mut [f32],
+    ) -> core::result::Result<usize, FeatureDspError> {
+        let n_frames = extract_mel_sequence(&self.config, raw, out)?;
+        self.apply_postprocessing(n_frames, out);
+        Ok(n_frames)
+    }
+
+    /// Processes raw 16-bit signed PCM samples (`&[i16]`) directly into Mel features.
+    pub fn process_i16(
+        &mut self,
+        pcm: &[i16],
+        out: &mut [f32],
+    ) -> core::result::Result<usize, FeatureDspError> {
+        let n_frames = extract_mel_sequence_i16(&self.config, pcm, out)?;
+        self.apply_postprocessing(n_frames, out);
+        Ok(n_frames)
+    }
+
+    /// Processes raw 16-bit signed PCM samples (`&[i16]`) directly into quantized `s8` features.
+    pub fn process_i16_quantized(
+        &mut self,
+        pcm: &[i16],
+        out_s8: &mut [i8],
+    ) -> core::result::Result<usize, FeatureDspError> {
+        let n_frames = self.config.num_frames();
+        let need = n_frames * self.config.num_mel_bins;
+        if out_s8.len() < need {
+            return Err(FeatureDspError::OutputTooSmall);
+        }
+
+        let mut float_buf = [0.0f32; MAX_MEL_BINS * 32];
+        if need > float_buf.len() {
+            return Err(FeatureDspError::UnsupportedConfig);
+        }
+
+        self.process_i16(pcm, &mut float_buf[..need])?;
+        quantize_mel_s8(
+            &float_buf[..need],
+            self.config.input_scale,
+            &mut out_s8[..need],
+        );
+        Ok(n_frames)
+    }
+
+    fn apply_postprocessing(&mut self, n_frames: usize, out: &mut [f32]) {
+        let bins = self.config.num_mel_bins;
+        for frame_idx in 0..n_frames {
+            let offset = frame_idx * bins;
+            let frame = &mut out[offset..offset + bins];
+
+            // 1. Optional PCAN noise estimation and gain control
+            if let Some(pcan) = self.pcan {
+                for i in 0..bins {
+                    let e = frame[i];
+                    self.noise_floor[i] = (1.0 - pcan.smoothing_alpha) * self.noise_floor[i]
+                        + pcan.smoothing_alpha * e;
+                    let denom = self.noise_floor[i] + pcan.offset;
+                    let ratio = (e / denom).max(0.0);
+                    let compressed = if pcan.strength == 0.5 {
+                        libm::sqrtf(ratio)
+                    } else if (pcan.strength - 1.0).abs() < 1e-4 {
+                        ratio
+                    } else {
+                        libm::powf(ratio, pcan.strength)
+                    };
+                    frame[i] = compressed * pcan.gain;
+                }
+            }
+
+            // 2. Optional Log-Mel compression
+            if self.log_mel {
+                for value in frame.iter_mut() {
+                    *value = libm::logf(1.0 + value.max(0.0));
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,5 +454,34 @@ mod tests {
         let mut out = [0.0f32; 7 * 16];
         extract_mel_sequence(&cfg, &[1e-4; 40], &mut out).unwrap();
         assert!(out.iter().all(|v| *v < 0.05));
+    }
+
+    #[test]
+    fn test_micro_audio_frontend_i16_and_pcan() {
+        let cfg = contract_cfg();
+        let mut frontend = MicroAudioFrontend::new(cfg)
+            .with_pcan(PcanConfig::default())
+            .with_log_mel(true);
+
+        // Generate simulated 16-bit PCM audio (440Hz sine equivalent)
+        let mut pcm = [0i16; 256];
+        for (i, sample) in pcm.iter_mut().enumerate() {
+            let phase = (i as f32) * 0.1;
+            *sample = (libm::sinf(phase) * 16000.0) as i16;
+        }
+
+        let mut mel_out = [0.0f32; 7 * 16];
+        let frames = frontend.process_i16(&pcm, &mut mel_out).unwrap();
+        assert_eq!(frames, 7);
+        assert!(mel_out.iter().any(|&v| v > 0.0));
+        assert!(mel_out.iter().all(|&v| v.is_finite()));
+
+        // Test quantized output
+        let mut quantized_s8 = [0i8; 7 * 16];
+        let q_frames = frontend
+            .process_i16_quantized(&pcm, &mut quantized_s8)
+            .unwrap();
+        assert_eq!(q_frames, 7);
+        assert!(quantized_s8.iter().any(|&v| v != 0));
     }
 }
