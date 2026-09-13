@@ -36,7 +36,7 @@ Inspired by and synergized with ARM's **CMSIS-NN**, Google's **LiteRT / TensorFl
 | [`crates/embedded-nn-codegen`](crates/embedded-nn-codegen) | Standalone `#![no_std]` Rust code emitter, C99 standalone header generator (`model.h`), and 1-Click CMake / Makefile project bundler (`bundle`). |
 | [`crates/embedded-nn-litert-plugin`](crates/embedded-nn-litert-plugin) | Google LiteRT C ABI Compiler Plugin (`libLiteRtCompilerPlugin_embedded_nn.so`) for native LiteRT model compilation. |
 | [`crates/embedded-nn-tflite`](crates/embedded-nn-tflite) | Upstream TFLite & LiteRT v2 importer with support for MLPerf / TFLM benchmark models (`keyword_scrambled_8bit.tflite`, `person_detect.tflite`, etc.). CI vendors MicroFlow's `sine` / `speech` / `person_detect` `.tflite` files under `fixtures/microflow/`. |
-| [`crates/embedded-nn-train`](crates/embedded-nn-train) | Host Burn QAT/PTQ trainer, SpecAugment, and Auto-TinyML Pareto Frontier Optimizer (`pareto`). |
+| [`crates/embedded-nn-train`](crates/embedded-nn-train) | Host Burn QAT/PTQ trainer for MLP, Conv/SVDF, and pre-norm tiny-transformer classifiers, plus SpecAugment and Auto-TinyML Pareto optimization. |
 | [`crates/embedded-nn-studio`](crates/embedded-nn-studio) | Interactive Desktop & WebAssembly (WASM) TinyML Studio: 3D gesture visualizer, Mel DSP, Burn training, Pareto trade-off explorer, static vs dynamic arena comparator, and USB-HS live inspector. |
 | [`crates/embedded-nn-live`](crates/embedded-nn-live) | Binary USB-HS / UART HIL streaming protocol (`0xE6 0x4E` frames, CRC-16, vendor bulk `1209:e612`) and multi-modal 6-DOF / 9-DOF dataset parser. |
 | [`crates/embedded-nn-cli`](crates/embedded-nn-cli) | `enn` CLI for memory profiling, codegen, TFLite ingest, dataset validation, and HIL test runner. |

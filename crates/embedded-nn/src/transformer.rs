@@ -125,14 +125,10 @@ pub fn rms_norm_s8(
             let centered = in_row[c] as i32 + params.input_offset;
             let gain = match gamma {
                 Some(g) => g[c] as i32,
-                None => 1,
+                None => 127,
             };
-            // `centered * inv_rms` is Q15; optional Q7 gamma is multiplied in the same domain.
-            let acc = if gamma.is_some() {
-                (centered * inv_rms * gain) >> 15
-            } else {
-                (centered * inv_rms) >> 15
-            };
+            // Keep the normalized value in Q15. Gamma is Q7 where 127 represents 1.0.
+            let acc = ((centered as i64 * inv_rms as i64 * gain as i64) / 127) as i32;
             let req = requantize(acc, quant_params.multiplier, quant_params.shift);
             out_row[c] = clamp(req + params.output_offset, i8::MIN as i32, i8::MAX as i32) as i8;
         }

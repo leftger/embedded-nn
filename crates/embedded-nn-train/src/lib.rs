@@ -7,6 +7,7 @@ mod conv_svdf;
 mod mlp;
 pub mod pareto;
 mod quantize;
+mod transformer;
 
 pub use augment::{
     AugmentConfig, apply_frequency_mask, apply_noise, apply_scaling, apply_time_mask,
@@ -17,3 +18,4 @@ pub use mlp::{
 };
 pub use pareto::{ParetoCandidate, evaluate_pareto_candidates, mark_pareto_frontier};
 pub use quantize::{nchw_to_nhwc, ptq_dense_mlp, quantize_conv_nchw_features, quantize_features};
+pub use transformer::{TinyTransformerConfig, TinyTransformerReport, train_tiny_transformer};

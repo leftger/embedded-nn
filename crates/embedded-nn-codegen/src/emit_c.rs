@@ -238,6 +238,23 @@ impl CCodeGenerator {
                         writeln!(out, "}};\n").unwrap();
                     }
                 }
+                OpPayload::Gelu { lut, .. } => {
+                    writeln!(
+                        out,
+                        "static const int8_t {}_layer_{}_gelu_lut[{}] = {{",
+                        name_lower,
+                        i,
+                        lut.len()
+                    )
+                    .unwrap();
+                    for (index, value) in lut.iter().enumerate() {
+                        write!(out, "{}, ", value).unwrap();
+                        if (index + 1) % 16 == 0 {
+                            writeln!(out).unwrap();
+                        }
+                    }
+                    writeln!(out, "}};\n").unwrap();
+                }
                 _ => {}
             }
         }
@@ -394,6 +411,39 @@ impl CCodeGenerator {
                         out,
                         "            for (size_t c = 0; c < {}; c++) r_out[c] = (int8_t)(r_in[c] - max_val);",
                         row_size
+                    )
+                    .unwrap();
+                    writeln!(out, "        }}").unwrap();
+                    writeln!(out, "    }}\n").unwrap();
+                }
+                OpPayload::Gelu { .. } => {
+                    let in_id = layer.inputs[0];
+                    let out_id = layer.outputs[0];
+                    let len = graph.tensors[out_id].shape.total_elements();
+                    let in_expr = if graph.inputs.contains(&in_id) {
+                        "input".to_string()
+                    } else {
+                        format!(
+                            "(const int8_t*)(arena + {})",
+                            arena.offset_of(in_id).unwrap_or(0)
+                        )
+                    };
+                    let out_expr = if graph.outputs.contains(&out_id) {
+                        "output".to_string()
+                    } else {
+                        format!(
+                            "(int8_t*)(arena + {})",
+                            arena.offset_of(out_id).unwrap_or(0)
+                        )
+                    };
+                    writeln!(out, "    {{").unwrap();
+                    writeln!(out, "        const int8_t* l_in = {};", in_expr).unwrap();
+                    writeln!(out, "        int8_t* l_out = {};", out_expr).unwrap();
+                    writeln!(out, "        for (size_t n = 0; n < {}; n++) {{", len).unwrap();
+                    writeln!(
+                        out,
+                        "            l_out[n] = {}_layer_{}_gelu_lut[(uint8_t)(l_in[n] + 128)];",
+                        name_lower, i
                     )
                     .unwrap();
                     writeln!(out, "        }}").unwrap();

@@ -11,7 +11,7 @@
 //! - Supported operators: `FULLY_CONNECTED`, `CONV_2D` (1-high kernels import as `Conv1D`),
 //!   `DEPTHWISE_CONV_2D`, `MAX_POOL_2D`, `AVERAGE_POOL_2D`, `SOFTMAX`, `RESHAPE`, `ADD`,
 //!   `TRANSPOSE` (general rank-1..4 perms), `PAD`/`PADV2`, `MEAN`, `SVDF`, `MUL`,
-//!   `CONCATENATION` (channel axis), `STRIDED_SLICE`, BASIC `LSTM`, and `BATCH_MATMUL`.
+//!   `CONCATENATION` (channel axis), `STRIDED_SLICE`, BASIC `LSTM`, `BATCH_MATMUL`, and `GELU`.
 //! - SAME padding is represented exactly, including odd totals where bottom/right differ from
 //!   top/left. VALID padding is represented as zero on every side.
 //! - Per-channel quantization is respected for `CONV_2D`/`DEPTHWISE_CONV_2D`/`FULLY_CONNECTED`
@@ -179,6 +179,9 @@ pub fn import_tflite(bytes: &[u8]) -> Result<ModelGraph, ImportError> {
                 PoolKind::Avg,
             )?,
             tflite::BuiltinOperator::SOFTMAX => builder.add_softmax(layer_name.clone(), in_id),
+            tflite::BuiltinOperator::GELU => {
+                import_gelu(&mut builder, &operator, in_id, &output_tensor, &layer_name)?
+            }
             tflite::BuiltinOperator::RESHAPE => {
                 let input_tensor = tensors.get(primary_input_idx);
                 if read_per_tensor_quant(&input_tensor)? != read_per_tensor_quant(&output_tensor)? {
@@ -1451,6 +1454,33 @@ fn import_batch_matmul(
         .map_err(|message| ImportError::UnsupportedConfiguration(message.into()))
 }
 
+fn import_gelu(
+    builder: &mut ModelBuilder,
+    operator: &tflite::Operator,
+    input_id: usize,
+    output_tensor: &tflite::Tensor,
+    name: &str,
+) -> Result<usize, ImportError> {
+    let approximate = operator
+        .builtin_options_as_gelu_options()
+        .is_some_and(|options| options.approximate());
+    let (scale, zero_point) = read_per_tensor_quant(output_tensor)?;
+    let (multiplier, shift) = quantize_multiplier(scale);
+    builder
+        .add_gelu_layer(
+            name,
+            input_id,
+            approximate,
+            QuantParams {
+                multiplier,
+                shift,
+                zero_point,
+                scale,
+            },
+        )
+        .map_err(|message| ImportError::UnsupportedConfiguration(message.into()))
+}
+
 #[cfg(any(test, feature = "fixture-generation"))]
 pub mod constructed_fixtures {
     //! Hand-built `.tflite` FlatBuffer fixtures, constructed with the same generated schema
@@ -2420,6 +2450,81 @@ pub mod constructed_fixtures {
         build_batch_matmul_model_with(false, false, &[1, 2, 2], &[1, 2, 2], &[1, 2, 2])
     }
 
+    pub fn build_gelu_model() -> Vec<u8> {
+        let mut fbb = FlatBufferBuilder::new();
+        let empty_buffer = Buffer::create(&mut fbb, &BufferArgs::default());
+        let buffers = fbb.create_vector(&[empty_buffer]);
+        let input = build_tensor(
+            &mut fbb,
+            &TensorSpec {
+                shape: &[1, 4],
+                buffer: 0,
+                scale: 0.05,
+                zero_point: 0,
+            },
+        );
+        let output = build_tensor(
+            &mut fbb,
+            &TensorSpec {
+                shape: &[1, 4],
+                buffer: 0,
+                scale: 0.04,
+                zero_point: -3,
+            },
+        );
+        let tensors = fbb.create_vector(&[input, output]);
+        let options = GeluOptions::create(&mut fbb, &GeluOptionsArgs { approximate: true });
+        let inputs = fbb.create_vector(&[0i32]);
+        let outputs = fbb.create_vector(&[1i32]);
+        let operator = Operator::create(
+            &mut fbb,
+            &OperatorArgs {
+                opcode_index: 0,
+                inputs: Some(inputs),
+                outputs: Some(outputs),
+                builtin_options_type: BuiltinOptions::GeluOptions,
+                builtin_options: Some(options.as_union_value()),
+                ..Default::default()
+            },
+        );
+        let operators = fbb.create_vector(&[operator]);
+        let graph_inputs = fbb.create_vector(&[0i32]);
+        let graph_outputs = fbb.create_vector(&[1i32]);
+        let subgraph = SubGraph::create(
+            &mut fbb,
+            &SubGraphArgs {
+                tensors: Some(tensors),
+                inputs: Some(graph_inputs),
+                outputs: Some(graph_outputs),
+                operators: Some(operators),
+                name: None,
+            },
+        );
+        let subgraphs = fbb.create_vector(&[subgraph]);
+        let opcode = OperatorCode::create(
+            &mut fbb,
+            &OperatorCodeArgs {
+                deprecated_builtin_code: BuiltinOperator::GELU.0 as i8,
+                version: 1,
+                builtin_code: BuiltinOperator::GELU,
+                ..Default::default()
+            },
+        );
+        let opcodes = fbb.create_vector(&[opcode]);
+        let model = Model::create(
+            &mut fbb,
+            &ModelArgs {
+                version: 3,
+                operator_codes: Some(opcodes),
+                subgraphs: Some(subgraphs),
+                buffers: Some(buffers),
+                ..Default::default()
+            },
+        );
+        fbb.finish_minimal(model);
+        fbb.finished_data().to_vec()
+    }
+
     fn build_batch_matmul_model_with(
         adj_x: bool,
         adj_y: bool,
@@ -2524,7 +2629,7 @@ mod tests {
     use crate::constructed_fixtures::{
         build_add_transpose_model, build_batch_matmul_adj_x_model, build_batch_matmul_model,
         build_batch_matmul_rank3_model, build_conv_pool_reshape_fc_softmax_model,
-        build_conv2d_per_channel_model, build_fc_only_model, build_sine_fc_model,
+        build_conv2d_per_channel_model, build_fc_only_model, build_gelu_model, build_sine_fc_model,
         build_uint8_fc_model,
     };
     use embedded_nn_compiler::builder::ModelBuilder;
@@ -2850,5 +2955,24 @@ mod tests {
             OpPayload::BatchMatMul { rhs_transposed } => assert!(!*rhs_transposed),
             other => panic!("expected BatchMatMul, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_import_gelu_and_execute() {
+        let graph = import_tflite(&build_gelu_model()).expect("import GELU");
+        match &graph.layers[0].op {
+            OpPayload::Gelu { approximate, lut } => {
+                assert!(*approximate);
+                assert_eq!(lut.len(), 256);
+            }
+            other => panic!("expected GELU, got {other:?}"),
+        }
+        let mut host = embedded_nn_compiler::HostInterpreter::new(&graph).unwrap();
+        let output = host.run(&[&[-40, -5, 0, 40]]).unwrap();
+        assert_eq!(output[0].len(), 4);
+        let rust = embedded_nn_codegen::RustCodeGenerator::new("Gelu").generate(&graph);
+        let c = embedded_nn_codegen::CCodeGenerator::new("Gelu").generate(&graph);
+        assert!(rust.contains("gelu_s8"));
+        assert!(c.contains("gelu_lut"));
     }
 }

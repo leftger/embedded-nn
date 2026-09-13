@@ -14,10 +14,10 @@ use embedded_nn::{
     PerTensorQuantParams, PoolParams, RmsNormParams, Tile, avg_pool_s8, batch_matmul_s8_shaped,
     concatenation_s8, convolve_1_x_n_s8, convolve_per_channel_s8, convolve_s4, convolve_s8,
     depthwise_conv_per_channel_s8, elementwise_add_s8, elementwise_mul_s8,
-    fully_connected_per_channel_s8, fully_connected_s4, fully_connected_s8, lstm_step_s8_s16,
-    max_pool_s8, pad_s8, reduce_mean_s8, rms_norm_s8, scaled_dot_product_attention_s8,
-    softmax_last_axis_s8, strided_slice_s8, svdf_s8, transpose_2d_s8, transpose_nd_s8,
-    transpose_spatial_s8,
+    fully_connected_per_channel_s8, fully_connected_s4, fully_connected_s8, gelu_s8,
+    lstm_step_s8_s16, max_pool_s8, pad_s8, reduce_mean_s8, rms_norm_s8,
+    scaled_dot_product_attention_s8, softmax_last_axis_s8, strided_slice_s8, svdf_s8,
+    transpose_2d_s8, transpose_nd_s8, transpose_spatial_s8,
 };
 use std::collections::HashMap;
 
@@ -417,6 +417,7 @@ impl<'g> HostInterpreter<'g> {
                 -256,
                 &mut output,
             ),
+            OpPayload::Gelu { lut, .. } => gelu_s8(&input, &mut output, lut),
             OpPayload::Reshape { .. } => {
                 if input.len() != output.len() {
                     return Err(self.invalid(layer, "reshape element counts differ"));
@@ -815,6 +816,7 @@ fn op_name(op: &OpPayload) -> &'static str {
         OpPayload::MaxPool2D { .. } => "MaxPool2D",
         OpPayload::AvgPool2D { .. } => "AvgPool2D",
         OpPayload::Softmax => "Softmax",
+        OpPayload::Gelu { .. } => "GELU",
         OpPayload::ElementwiseAdd { .. } => "ADD",
         OpPayload::ElementwiseMul { .. } => "MUL",
         OpPayload::Concat => "Concat",

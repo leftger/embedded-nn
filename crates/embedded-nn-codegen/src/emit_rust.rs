@@ -273,6 +273,10 @@ impl RustCodeGenerator {
             .layers
             .iter()
             .any(|l| matches!(l.op, OpPayload::ScaledDotProductAttention { .. }));
+        let has_gelu = graph
+            .layers
+            .iter()
+            .any(|l| matches!(l.op, OpPayload::Gelu { .. }));
         let has_transpose_2d = graph.layers.iter().any(|l| {
             matches!(
                 l.op,
@@ -376,6 +380,9 @@ impl RustCodeGenerator {
         }
         if has_attn {
             out.push_str("    scaled_dot_product_attention_s8, AttentionParams,\n");
+        }
+        if has_gelu {
+            out.push_str("    gelu_s8,\n");
         }
         if has_transpose_2d {
             out.push_str("    transpose_2d_s8,\n");
@@ -541,6 +548,9 @@ impl RustCodeGenerator {
                     if let Some(b) = bias {
                         emit_i32_array(&mut out, &format!("{}_BIAS_S32", prefix), b);
                     }
+                }
+                OpPayload::Gelu { lut, .. } => {
+                    emit_i8_array(&mut out, &format!("{}_GELU_LUT_S8", prefix), lut);
                 }
                 OpPayload::MaxPool2D { .. }
                 | OpPayload::AvgPool2D { .. }
@@ -1037,6 +1047,12 @@ impl RustCodeGenerator {
                     out.push_str(&format!(
                         "        softmax_last_axis_s8(\n            in_buf,\n            {},\n            {},\n            {},\n            {},\n            1073741824,\n            20,\n            -256,\n            out_buf,\n        ).map_err(|_| \"Softmax s8 execution failed\")?;\n\n",
                         in_t.shape.batches, in_t.shape.height, in_t.shape.width, in_t.shape.channels.max(1)
+                    ));
+                }
+                OpPayload::Gelu { .. } => {
+                    out.push_str(&format!(
+                        "        gelu_s8(in_buf, out_buf, &{}_GELU_LUT_S8)\n            .map_err(|_| \"GELU s8 execution failed\")?;\n\n",
+                        prefix
                     ));
                 }
                 OpPayload::Reshape { .. } => {

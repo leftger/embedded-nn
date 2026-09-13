@@ -242,6 +242,11 @@ pub enum OpPayload {
         padding: Padding2D,
     },
     Softmax,
+    Gelu {
+        /// One output code for every possible int8 input code.
+        lut: Vec<i8>,
+        approximate: bool,
+    },
     ElementwiseAdd {
         quant: ElementwiseAddQuant,
         activation: ActivationType,
@@ -427,6 +432,9 @@ impl ModelGraph {
                 }
                 OpPayload::RmsNorm { gamma: Some(g), .. } => {
                     total += g.len();
+                }
+                OpPayload::Gelu { lut, .. } => {
+                    total += lut.len();
                 }
                 _ => {}
             }

@@ -1,7 +1,7 @@
 //! Activation functions for quantized tensors.
 
 use crate::support::{clamp, requantize};
-use crate::types::Activation;
+use crate::types::{Activation, Error, Result};
 
 /// Sigmoid and Tanh 256-element lookup table (Q0.16 format).
 pub const SIGMOID_TABLE_UINT16: [u16; 256] = [
@@ -56,6 +56,22 @@ pub fn activation_s8(data: &mut [i8], act: Activation) {
         let clamped = clamp(*val as i32, act.min, act.max);
         *val = clamped as i8;
     }
+}
+
+/// Number of entries in an int8 GELU lookup table.
+pub const GELU_LUT_SIZE: usize = 256;
+
+/// Applies int8 GELU using a scale-aware lookup table prepared by the compiler.
+///
+/// The on-device path is one lookup per element and contains no floating-point arithmetic.
+pub fn gelu_s8(input: &[i8], output: &mut [i8], lut: &[i8]) -> Result<()> {
+    if input.len() != output.len() || lut.len() != GELU_LUT_SIZE {
+        return Err(Error::ArgumentError);
+    }
+    for (&input, output) in input.iter().zip(output.iter_mut()) {
+        *output = lut[(i32::from(input) + 128) as usize];
+    }
+    Ok(())
 }
 
 /// In-place ReLU for int16 buffer.

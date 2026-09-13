@@ -87,6 +87,39 @@ pub fn calculate_output_requant_multiplier(
     quantize_multiplier(real_multiplier)
 }
 
+/// Builds the scale-aware int8 GELU table used by TFLite and the runtime.
+pub fn calculate_gelu_lut(input: &QuantParams, output: &QuantParams, approximate: bool) -> Vec<i8> {
+    fn erf_approx(x: f32) -> f32 {
+        // Abramowitz and Stegun 7.1.26 (maximum error about 1.5e-7).
+        let sign = if x < 0.0 { -1.0 } else { 1.0 };
+        let x = x.abs();
+        let t = 1.0 / (1.0 + 0.327_591_1 * x);
+        let polynomial =
+            (((((1.061_405_4 * t - 1.453_152_1) * t) + 1.421_413_8) * t - 0.284_496_72) * t
+                + 0.254_829_6)
+                * t;
+        sign * (1.0 - polynomial * (-x * x).exp())
+    }
+
+    (-128_i32..=127)
+        .map(|q| {
+            let x = (q - input.zero_point) as f32 * input.scale;
+            let y = if approximate {
+                const SQRT_2_OVER_PI: f32 = 0.797_884_6;
+                0.5 * x * (1.0 + (SQRT_2_OVER_PI * (x + 0.044_715 * x * x * x)).tanh())
+            } else {
+                0.5 * x * (1.0 + erf_approx(x * core::f32::consts::FRAC_1_SQRT_2))
+            };
+            let quantized = if output.scale > 1e-12 {
+                (y / output.scale).round() as i32 + output.zero_point
+            } else {
+                output.zero_point
+            };
+            quantized.clamp(i8::MIN as i32, i8::MAX as i32) as i8
+        })
+        .collect()
+}
+
 /// Derives the fixed-point parameters used by TFLite Micro's quantized ADD preparation.
 ///
 /// Both inputs are first rescaled into a common domain with 20 bits of headroom, then the
@@ -360,5 +393,28 @@ mod tests {
         let q_neg = calculate_symmetric_quant_s8(4.0);
         assert_eq!(q_neg.zero_point, 0);
         assert_eq!(q_neg.scale, 4.0 / 127.0);
+    }
+
+    #[test]
+    fn gelu_lut_tracks_input_output_domains_and_mode() {
+        let input = QuantParams {
+            scale: 0.05,
+            zero_point: -7,
+            ..QuantParams::default()
+        };
+        let output = QuantParams {
+            scale: 0.025,
+            zero_point: 3,
+            ..QuantParams::default()
+        };
+        let exact = calculate_gelu_lut(&input, &output, false);
+        let approximate = calculate_gelu_lut(&input, &output, true);
+        assert_eq!(exact.len(), 256);
+        assert_eq!(approximate.len(), 256);
+        assert_eq!(
+            exact[(input.zero_point + 128) as usize],
+            output.zero_point as i8
+        );
+        assert_ne!(exact, approximate);
     }
 }

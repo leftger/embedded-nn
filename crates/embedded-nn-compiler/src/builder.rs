@@ -1,5 +1,7 @@
 use crate::ir::*;
-use crate::quant::{calculate_elementwise_add_quant, calculate_elementwise_mul_quant};
+use crate::quant::{
+    calculate_elementwise_add_quant, calculate_elementwise_mul_quant, calculate_gelu_lut,
+};
 
 fn packed_dims(shape: &TensorShape, rank: usize) -> Result<Vec<usize>, &'static str> {
     Ok(match rank {
@@ -1307,6 +1309,46 @@ impl ModelBuilder {
         });
 
         out_id
+    }
+
+    pub fn add_gelu_layer(
+        &mut self,
+        name: impl Into<String>,
+        input_id: usize,
+        approximate: bool,
+        output_quant: QuantParams,
+    ) -> Result<usize, &'static str> {
+        let input = self
+            .graph
+            .tensors
+            .iter()
+            .find(|tensor| tensor.id == input_id)
+            .ok_or("GELU input tensor not found")?;
+        if input.dtype != DataType::Int8 {
+            return Err("GELU only supports int8 tensors");
+        }
+        let shape = input.shape;
+        let lut = calculate_gelu_lut(&input.quant, &output_quant, approximate);
+        let out_id = self.next_tensor_id;
+        self.next_tensor_id += 1;
+        let layer_name = name.into();
+        self.graph.tensors.push(TensorDesc {
+            id: out_id,
+            name: format!("{}_out", layer_name),
+            shape,
+            dtype: DataType::Int8,
+            quant: output_quant,
+        });
+        let layer_id = self.next_layer_id;
+        self.next_layer_id += 1;
+        self.graph.layers.push(LayerNode {
+            id: layer_id,
+            name: layer_name,
+            inputs: vec![input_id],
+            outputs: vec![out_id],
+            op: OpPayload::Gelu { lut, approximate },
+        });
+        Ok(out_id)
     }
 
     pub fn mark_output(&mut self, tensor_id: usize) {

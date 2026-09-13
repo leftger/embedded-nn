@@ -147,9 +147,42 @@ fn test_fused_activation_mapping() {
     let act_s8 = relu.to_activation(false);
     assert_eq!(act_s8.min, 0);
     assert_eq!(act_s8.max, 127);
+    let act_s16 = relu.to_activation(true);
+    assert_eq!(act_s16.max, i16::MAX as i32);
 
     let relu6 = FusedActivation::Relu6;
     let act_r6 = relu6.to_activation(false);
     assert_eq!(act_r6.min, 0);
     assert_eq!(act_r6.max, 6);
+
+    let none8 = FusedActivation::None.to_activation(false);
+    assert_eq!(none8.min, i8::MIN as i32);
+    let none16 = FusedActivation::None.to_activation(true);
+    assert_eq!(none16.max, i16::MAX as i32);
+
+    let leaky8 = FusedActivation::LeakyRelu.to_activation(false);
+    assert_eq!(leaky8.max, i8::MAX as i32);
+    let leaky16 = FusedActivation::LeakyRelu.to_activation(true);
+    assert_eq!(leaky16.min, i16::MIN as i32);
+}
+
+#[test]
+fn test_tensor_view_short_buffer_and_valid_zero_output() {
+    use embedded_nn::{Padding2D, TensorView, TensorViewPadding};
+
+    let dims = Dims::new(1, 2, 2, 1);
+    let short = [10i8];
+    let view = TensorView::new(
+        &short,
+        dims,
+        TensorViewPadding::Valid,
+        Tile::new(1, 1),
+        Tile::new(3, 3),
+    );
+    assert_eq!(view.get_or_pad(0, 1, 1, 0, -5), -5);
+    assert_eq!(view.output_spatial_dims(), (0, 0));
+
+    let pad = Padding2D::symmetric(2, 3);
+    assert_eq!(pad.left, 2);
+    assert_eq!(pad.top, 3);
 }

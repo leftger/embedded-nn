@@ -1,11 +1,23 @@
 use embedded_nn::{
     Activation,
     activations::{
-        SIGMOID_TABLE_UINT16, activation_s8, activation_s16, leaky_relu_s8, relu_s8, relu_s16,
-        relu6_s8, sigmoid_s8, sigmoid_s16, tanh_s8, tanh_s16,
+        GELU_LUT_SIZE, SIGMOID_TABLE_UINT16, activation_s8, activation_s16, gelu_s8, leaky_relu_s8,
+        relu_s8, relu_s16, relu6_s8, sigmoid_s8, sigmoid_s16, tanh_s8, tanh_s16,
     },
     float_ops::{relu_f32, relu6_f32},
 };
+
+#[test]
+fn test_gelu_s8_uses_all_input_codes_and_validates_shapes() {
+    let lut: Vec<i8> = (-128_i32..=127).map(|value| value as i8).collect();
+    let input = [-128i8, -32, -4, 0, 4, 32, 127];
+    let mut output = [0i8; 7];
+    gelu_s8(&input, &mut output, &lut).unwrap();
+    assert_eq!(output, input);
+    assert_eq!(lut.len(), GELU_LUT_SIZE);
+    assert!(gelu_s8(&input, &mut output[..3], &lut).is_err());
+    assert!(gelu_s8(&input, &mut output, &lut[..255]).is_err());
+}
 
 #[test]
 fn test_relu_s8_comprehensive() {

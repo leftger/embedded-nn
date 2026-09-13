@@ -855,4 +855,197 @@ mod tests {
         let relu6 = relu6_forward(&relu6_in);
         assert!(relu6.data[0].iter().all(|&v| v <= 12));
     }
+
+    #[test]
+    fn quantized_element_conversions_and_tensor_mutators() {
+        assert_eq!(i8::ZERO, 0);
+        assert_eq!(i8::to_i32(-5), -5);
+        assert_eq!(i8::from_i32_clamped(200), 127);
+        assert_eq!(i8::from_i32_clamped(-200), -128);
+
+        assert_eq!(u8::ZERO, 0);
+        assert_eq!(u8::to_i32(9), 9);
+        assert_eq!(u8::from_i32_clamped(300), 255);
+        assert_eq!(u8::from_i32_clamped(-3), 0);
+
+        assert_eq!(i16::ZERO, 0);
+        assert_eq!(i16::to_i32(-40), -40);
+        assert_eq!(i16::from_i32_clamped(40_000), i16::MAX);
+        assert_eq!(i16::from_i32_clamped(-40_000), i16::MIN);
+
+        let mut t = Tensor2D::<i8, 1, 2>::zero([0.25], [1]);
+        t.set(0, 1, 7);
+        assert_eq!(t.get(0, 1), 7);
+        t.as_mut_slice()[0] = -2;
+        assert_eq!(t.as_slice(), &[-2, 7]);
+        assert!(t.reshape_4d::<1, 1, 1, 1>().is_err());
+
+        let t4 = Tensor4D::<i8, 1, 1, 2, 1>::new([[[[3], [4]]]], [0.5], [0]);
+        assert!(t4.reshape_2d::<3, 1>().is_err());
+    }
+
+    #[test]
+    fn tensor4d_quantize_dequantize_and_out_of_bounds_views() {
+        let float_in = [[[[1.0f32, -2.0], [3.0, 4.0]]]];
+        let q = Tensor4D::<i8, 1, 1, 2, 2>::quantize_from_f32(&float_in, [0.5], [0]);
+        assert_eq!(q.data[0][0][0][0], 2);
+        assert_eq!(q.data[0][0][0][1], -4);
+        assert_eq!(q.dequantize_to_f32(), float_in);
+
+        let t = Tensor4D::<i8, 1, 2, 2, 1>::new([[[[1], [2]], [[3], [4]]]], [1.0], [0]);
+        let same_corner: StaticTensorView<i8, 3, 3, 1> =
+            t.view((0, 0), 0, TensorViewPadding::Same, (1, 1));
+        assert!(same_corner.len < 9);
+        assert!(!same_corner.mask[0][0]);
+
+        let same_past: StaticTensorView<i8, 3, 3, 1> =
+            t.view((3, 3), 0, TensorViewPadding::Same, (1, 1));
+        assert!(same_past.len < 9);
+
+        let same_batch: StaticTensorView<i8, 1, 1, 1> =
+            t.view((0, 0), 4, TensorViewPadding::Same, (1, 1));
+        assert_eq!(same_batch.len, 0);
+
+        let valid_oob: StaticTensorView<i8, 2, 2, 1> =
+            t.view((2, 2), 0, TensorViewPadding::Valid, (1, 1));
+        assert_eq!(valid_oob.len, 0);
+        assert!(!valid_oob.mask[0][0]);
+    }
+
+    #[test]
+    fn operator_wrappers_cover_fused_paths_errors_and_dwconv() {
+        let input = Tensor2D::<i8, 1, 2>::new([[1, -2]], [0.5], [0]);
+        let weights = Tensor2D::<i8, 1, 2>::new([[1, 1]], [0.5], [0]);
+        let bias = [2];
+
+        let none = fully_connected_forward::<1, 2, 1>(
+            &input,
+            &weights,
+            Some(&bias),
+            0.5,
+            0,
+            FusedActivation::None,
+            1_073_741_824,
+            1,
+        )
+        .unwrap();
+        assert_eq!(none.data[0][0], 1);
+
+        let relu6 = fully_connected_forward::<1, 2, 1>(
+            &input,
+            &weights,
+            None,
+            0.5,
+            0,
+            FusedActivation::Relu6,
+            1_073_741_824,
+            1,
+        )
+        .unwrap();
+        assert!(relu6.data[0][0] <= 12);
+
+        let leaky = fully_connected_forward::<1, 2, 1>(
+            &input,
+            &weights,
+            None,
+            0.5,
+            0,
+            FusedActivation::LeakyRelu,
+            1_073_741_824,
+            1,
+        )
+        .unwrap();
+        assert_eq!(leaky.data.len(), 1);
+
+        let conv_in = Tensor4D::<i8, 1, 1, 1, 1>::new([[[[1]]]], [1.0], [0]);
+        let conv_k = Tensor4D::<i8, 1, 1, 1, 1, 1>::new([[[[1]]]], [1.0], [0]);
+        let conv_params = ConvParams {
+            input_offset: 0,
+            output_offset: 0,
+            stride: Tile::new(1, 1),
+            padding: Padding2D::new(0, 0, 0, 0),
+            dilation: Tile::new(1, 1),
+            activation: Activation::int8_unconstrained(),
+        };
+        assert!(
+            conv2d_forward::<1, 1, 1, 1, 1, 1, 1, 1, 1, 1>(
+                &conv_in,
+                &conv_k,
+                None,
+                &conv_params,
+                None,
+                None,
+                1.0,
+                0,
+            )
+            .is_err()
+        );
+
+        let empty_in = Tensor4D::<i8, 1, 1, 1, 0>::zero([1.0], [0]);
+        let empty_k = Tensor4D::<i8, 1, 1, 1, 0, 1>::zero([1.0], [0]);
+        let quant = PerTensorQuantParams::new(1_073_741_824, 1);
+        assert!(
+            conv2d_forward::<1, 1, 1, 0, 1, 1, 1, 1, 1, 1>(
+                &empty_in,
+                &empty_k,
+                None,
+                &conv_params,
+                None,
+                Some(&quant),
+                1.0,
+                0,
+            )
+            .is_err()
+        );
+        let pcq = PerChannelQuantParams::new(&[1_073_741_824], &[1]);
+        assert!(
+            conv2d_forward::<1, 1, 1, 0, 1, 1, 1, 1, 1, 1>(
+                &empty_in,
+                &empty_k,
+                None,
+                &conv_params,
+                Some(&pcq),
+                None,
+                1.0,
+                0,
+            )
+            .is_err()
+        );
+
+        let dw_in = Tensor4D::<i8, 1, 2, 2, 1>::new([[[[2], [2]], [[2], [2]]]], [1.0], [0]);
+        let dw_k = Tensor4D::<i8, 1, 2, 2, 1, 1>::new([[[[1], [1]], [[1], [1]]]], [1.0], [0]);
+        let dw_params = DwConvParams {
+            input_offset: 0,
+            output_offset: 0,
+            ch_mult: 1,
+            stride: Tile::new(1, 1),
+            padding: Padding2D::new(0, 0, 0, 0),
+            dilation: Tile::new(1, 1),
+            activation: Activation::int8_unconstrained(),
+        };
+        let dw_quant = PerChannelQuantParams::new(&[1_073_741_824], &[1]);
+        let dw = depthwise_conv2d_forward::<1, 2, 2, 1, 1, 2, 2, 1, 1, 1>(
+            &dw_in, &dw_k, None, &dw_params, &dw_quant, 1.0, 0,
+        )
+        .unwrap();
+        assert_eq!(dw.data[0][0][0][0], 8);
+
+        let mut bad_dw = dw_params;
+        bad_dw.ch_mult = 0;
+        assert!(
+            depthwise_conv2d_forward::<1, 2, 2, 1, 1, 2, 2, 1, 1, 1>(
+                &dw_in, &dw_k, None, &bad_dw, &dw_quant, 1.0, 0,
+            )
+            .is_err()
+        );
+
+        let relu_in = Tensor2D::<i8, 1, 3>::new([[-5, -1, 4]], [0.5], [-1]);
+        let relu = relu_forward(&relu_in);
+        assert_eq!(relu.data[0], [-1, -1, 4]);
+
+        let relu6_in = Tensor2D::<i8, 1, 3>::new([[-4, 3, 40]], [0.5], [0]);
+        let relu6 = relu6_forward(&relu6_in);
+        assert_eq!(relu6.data[0][0], 0);
+        assert_eq!(relu6.data[0][2], 12);
+    }
 }

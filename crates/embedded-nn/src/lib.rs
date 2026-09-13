@@ -6,7 +6,7 @@
 //! ## Modules
 //! - [`types`]: Dimensional shapes, parameter structures, error types.
 //! - [`support`]: Fixed-point quantization math, rounding division, bit operations.
-//! - [`activations`]: ReLU, ReLU6, LeakyReLU, Sigmoid, Tanh.
+//! - [`activations`]: ReLU, ReLU6, LeakyReLU, Sigmoid, Tanh, approximate GELU.
 //! - [`basic_math`]: Elementwise addition, subtraction, and multiplication.
 //! - [`convolution`]: 2D Convolution, 1x1 Convolution, Depthwise Convolution, Transposed Conv, 1D Temporal Conv.
 //! - [`fully_connected`]: Fully Connected (Linear / Dense) layers and Batch Matrix Multiplication (`BatchMatMul`).
@@ -67,8 +67,9 @@ pub mod transpose;
 pub mod types;
 
 pub use activations::{
-    fast_sigmoid_f32_slice, fast_sigmoid_lut_derivative_f32, fast_sigmoid_lut_f32,
+    GELU_LUT_SIZE, fast_sigmoid_f32_slice, fast_sigmoid_lut_derivative_f32, fast_sigmoid_lut_f32,
     fast_sigmoid_rational_f32, fast_tanh_derivative_f32, fast_tanh_f32, fast_tanh_f32_slice,
+    gelu_s8,
 };
 pub use anomaly::{
     AnomalyResult, DistanceMetric, FewShotPrototypeMatcherF32, FewShotPrototypeMatcherS8,
