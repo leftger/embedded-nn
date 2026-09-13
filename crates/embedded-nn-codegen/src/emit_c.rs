@@ -337,14 +337,27 @@ impl CCodeGenerator {
                     writeln!(out, "    }}\n").unwrap();
                 }
                 OpPayload::Softmax => {
-                    let _in_id = layer.inputs[0];
+                    let in_id = layer.inputs[0];
                     let out_id = layer.outputs[0];
-                    let out_depth = graph.tensors[out_id].shape.total_elements();
+                    let in_t = &graph.tensors[in_id];
+                    let row_size = in_t.shape.channels.max(1);
+                    let num_rows = in_t.shape.total_elements() / row_size;
                     writeln!(out, "    {{").unwrap();
+                    let in_offset = arena.offset_of(in_id).unwrap_or(0);
+                    let out_offset = arena.offset_of(out_id).unwrap_or(0);
+                    if graph.inputs.contains(&in_id) {
+                        writeln!(out, "        const int8_t* l_in = input;").unwrap();
+                    } else {
+                        writeln!(
+                            out,
+                            "        const int8_t* l_in = (const int8_t*)(arena + {});",
+                            in_offset
+                        )
+                        .unwrap();
+                    }
                     if graph.outputs.contains(&out_id) {
                         writeln!(out, "        int8_t* l_out = output;").unwrap();
                     } else {
-                        let out_offset = arena.offset_of(out_id).unwrap_or(0);
                         writeln!(
                             out,
                             "        int8_t* l_out = (int8_t*)(arena + {});",
@@ -352,15 +365,141 @@ impl CCodeGenerator {
                         )
                         .unwrap();
                     }
-                    writeln!(out, "        int8_t max_val = l_out[0];").unwrap();
-                    writeln!(out, "        for (size_t c = 1; c < {}; c++) if (l_out[c] > max_val) max_val = l_out[c];", out_depth).unwrap();
                     writeln!(
                         out,
-                        "        for (size_t c = 0; c < {}; c++) l_out[c] -= max_val;",
-                        out_depth
+                        "        for (size_t row = 0; row < {}; row++) {{",
+                        num_rows
                     )
                     .unwrap();
+                    writeln!(
+                        out,
+                        "            const int8_t* r_in = l_in + row * {};",
+                        row_size
+                    )
+                    .unwrap();
+                    writeln!(
+                        out,
+                        "            int8_t* r_out = l_out + row * {};",
+                        row_size
+                    )
+                    .unwrap();
+                    writeln!(out, "            int8_t max_val = r_in[0];").unwrap();
+                    writeln!(
+                        out,
+                        "            for (size_t c = 1; c < {}; c++) if (r_in[c] > max_val) max_val = r_in[c];",
+                        row_size
+                    )
+                    .unwrap();
+                    writeln!(
+                        out,
+                        "            for (size_t c = 0; c < {}; c++) r_out[c] = (int8_t)(r_in[c] - max_val);",
+                        row_size
+                    )
+                    .unwrap();
+                    writeln!(out, "        }}").unwrap();
                     writeln!(out, "    }}\n").unwrap();
+                }
+                OpPayload::BatchMatMul { rhs_transposed } => {
+                    let lhs_id = layer.inputs[0];
+                    let rhs_id = layer.inputs[1];
+                    let out_id = layer.outputs[0];
+                    let lhs = &graph.tensors[lhs_id];
+                    let rhs = &graph.tensors[rhs_id];
+                    let (batches, rows, accum) = lhs.shape.as_batched_matrix();
+                    let (_, rhs_d0, rhs_d1) = rhs.shape.as_batched_matrix();
+                    let (rhs_accum, cols) = if *rhs_transposed {
+                        (rhs_d1, rhs_d0)
+                    } else {
+                        (rhs_d0, rhs_d1)
+                    };
+                    let _ = rhs_accum;
+                    let q = &graph.tensors[out_id].quant;
+                    writeln!(out, "    {{").unwrap();
+                    writeln!(
+                        out,
+                        "        const int8_t* lhs = {};",
+                        if graph.inputs.contains(&lhs_id) {
+                            "input".to_string()
+                        } else {
+                            format!(
+                                "(const int8_t*)(arena + {})",
+                                arena.offset_of(lhs_id).unwrap_or(0)
+                            )
+                        }
+                    )
+                    .unwrap();
+                    writeln!(
+                        out,
+                        "        const int8_t* rhs = (const int8_t*)(arena + {});",
+                        arena.offset_of(rhs_id).unwrap_or(0)
+                    )
+                    .unwrap();
+                    if graph.outputs.contains(&out_id) {
+                        writeln!(out, "        int8_t* l_out = output;").unwrap();
+                    } else {
+                        writeln!(
+                            out,
+                            "        int8_t* l_out = (int8_t*)(arena + {});",
+                            arena.offset_of(out_id).unwrap_or(0)
+                        )
+                        .unwrap();
+                    }
+                    writeln!(out, "        for (size_t b = 0; b < {}; b++) {{", batches).unwrap();
+                    writeln!(out, "          for (size_t i = 0; i < {}; i++) {{", rows).unwrap();
+                    writeln!(out, "            for (size_t j = 0; j < {}; j++) {{", cols).unwrap();
+                    writeln!(out, "              int32_t acc = 0;").unwrap();
+                    writeln!(
+                        out,
+                        "              for (size_t k = 0; k < {}; k++) {{",
+                        accum
+                    )
+                    .unwrap();
+                    writeln!(
+                        out,
+                        "                int32_t lv = (int32_t)lhs[(b * {} + i) * {} + k] + ({});",
+                        rows, accum, -lhs.quant.zero_point
+                    )
+                    .unwrap();
+                    if *rhs_transposed {
+                        writeln!(
+                            out,
+                            "                int32_t rv = (int32_t)rhs[(b * {} + j) * {} + k] + ({});",
+                            cols, accum, -rhs.quant.zero_point
+                        )
+                        .unwrap();
+                    } else {
+                        writeln!(
+                            out,
+                            "                int32_t rv = (int32_t)rhs[(b * {} + k) * {} + j] + ({});",
+                            accum, cols, -rhs.quant.zero_point
+                        )
+                        .unwrap();
+                    }
+                    writeln!(out, "                acc += lv * rv;").unwrap();
+                    writeln!(out, "              }}").unwrap();
+                    writeln!(
+                        out,
+                        "              acc = {}_requantize(acc, {}, {});",
+                        name_lower, q.multiplier, q.shift
+                    )
+                    .unwrap();
+                    writeln!(
+                        out,
+                        "              l_out[(b * {} + i) * {} + j] = (int8_t){}_clamp(acc + {}, -128, 127);",
+                        rows, cols, name_lower, q.zero_point
+                    )
+                    .unwrap();
+                    writeln!(out, "            }}").unwrap();
+                    writeln!(out, "          }}").unwrap();
+                    writeln!(out, "        }}").unwrap();
+                    writeln!(out, "    }}\n").unwrap();
+                }
+                OpPayload::RmsNorm { .. } | OpPayload::ScaledDotProductAttention { .. } => {
+                    writeln!(
+                        out,
+                        "    /* RMSNorm / fused attention: use the Rust runtime on this target. */"
+                    )
+                    .unwrap();
                 }
                 _ => {}
             }
@@ -467,5 +606,38 @@ mod tests {
         let c_code = generator.generate(&graph);
         assert!(c_code.contains("#define CONVPOOLMODEL_INPUT_SHAPE_H 2"));
         assert!(c_code.contains("convpoolmodel_predict"));
+    }
+
+    #[test]
+    fn test_c_code_generator_softmax_bmm_and_transformer_stubs() {
+        let mut sm = ModelBuilder::new("SoftmaxRows");
+        let x = sm.add_input("x", TensorShape::new_2d(2, 2), DataType::Int8, None);
+        let y = sm.add_softmax("sm", x);
+        sm.mark_output(y);
+        let c = CCodeGenerator::new("SoftmaxRows").generate(&sm.build());
+        assert!(c.contains("for (size_t row = 0; row < 2; row++)"));
+
+        let mut bmm = ModelBuilder::new("BmmC");
+        let lhs = bmm.add_input("lhs", TensorShape::new_2d(2, 2), DataType::Int8, None);
+        let rhs = bmm.add_input("rhs", TensorShape::new_2d(2, 2), DataType::Int8, None);
+        let out = bmm
+            .add_batch_matmul_layer("mm", lhs, rhs, true, None)
+            .unwrap();
+        bmm.mark_output(out);
+        let c = CCodeGenerator::new("BmmC").generate(&bmm.build());
+        assert!(c.contains("int32_t acc = 0;"));
+
+        let tokens = TensorShape::new_4d(1, 2, 1, 4);
+        let mut enc = ModelBuilder::new("EncC");
+        let q = enc.add_input("q", tokens, DataType::Int8, None);
+        let k = enc.add_input("k", tokens, DataType::Int8, None);
+        let v = enc.add_input("v", tokens, DataType::Int8, None);
+        let n = enc.add_rms_norm_layer("n", q, None, 1, None).unwrap();
+        let a = enc
+            .add_attention_layer("a", n, k, v, 2, 1_073_741_824, 1, None)
+            .unwrap();
+        enc.mark_output(a);
+        let c = CCodeGenerator::new("EncC").generate(&enc.build());
+        assert!(c.contains("RMSNorm / fused attention"));
     }
 }

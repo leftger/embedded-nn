@@ -55,6 +55,16 @@ impl Padding2D {
 }
 
 impl TensorShape {
+    /// Interprets the packed NHWC tensor as a batched matrix whose last two dims are
+    /// `(width = rows, channels = cols)` and whose leading dims are `batches * height`.
+    pub fn as_batched_matrix(&self) -> (usize, usize, usize) {
+        (
+            self.batches.saturating_mul(self.height.max(1)),
+            self.width.max(1),
+            self.channels.max(1),
+        )
+    }
+
     pub const fn new_1d(len: usize) -> Self {
         Self {
             batches: 1,
@@ -285,6 +295,24 @@ pub enum OpPayload {
         bias: Option<Vec<i32>>,
         activation: ActivationType,
     },
+    /// Batched matmul over the last two packed dims: `LHS[B,R,K] x RHS[B,K,C]`.
+    BatchMatMul {
+        rhs_transposed: bool,
+    },
+    /// Last-axis RMSNorm with optional per-channel gain (`gamma`).
+    RmsNorm {
+        gamma: Option<Vec<i8>>,
+        epsilon: u32,
+    },
+    /// Fused scaled-dot-product attention. Inputs are `Q`, `K`, `V` packed as `[N, T, H*Dh]`.
+    ScaledDotProductAttention {
+        num_heads: usize,
+        logits_multiplier: i32,
+        logits_shift: i32,
+        softmax_mult: i32,
+        softmax_shift: i32,
+        softmax_diff_min: i32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -397,6 +425,9 @@ impl ModelGraph {
                         total += b.len() * 4;
                     }
                 }
+                OpPayload::RmsNorm { gamma: Some(g), .. } => {
+                    total += g.len();
+                }
                 _ => {}
             }
         }
@@ -458,5 +489,14 @@ mod tests {
         });
 
         assert_eq!(graph.total_weights_size_bytes(), 16 + 64 + 16 * 4);
+    }
+
+    #[test]
+    fn batched_matrix_view_uses_last_two_dims() {
+        assert_eq!(TensorShape::new_2d(2, 3).as_batched_matrix(), (1, 2, 3));
+        assert_eq!(
+            TensorShape::new_4d(1, 4, 8, 16).as_batched_matrix(),
+            (4, 8, 16)
+        );
     }
 }

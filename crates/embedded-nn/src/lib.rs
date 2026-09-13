@@ -11,7 +11,8 @@
 //! - [`convolution`]: 2D Convolution, 1x1 Convolution, Depthwise Convolution, Transposed Conv, 1D Temporal Conv.
 //! - [`fully_connected`]: Fully Connected (Linear / Dense) layers and Batch Matrix Multiplication (`BatchMatMul`).
 //! - [`pooling`]: Max Pooling, Average Pooling.
-//! - [`softmax`]: Softmax activation.
+//! - [`softmax`]: Softmax activation (including last-axis / attention softmax).
+//! - [`transformer`]: Tiny-encoder kernels (RMSNorm, fused scaled-dot-product attention).
 //! - [`mod@concat`]: Depthwise concatenation.
 //! - [`pad`]: Tensor padding.
 //! - [`transpose`]: Matrix and spatial transposition.
@@ -61,6 +62,7 @@ pub mod softmax;
 pub mod subbyte;
 pub mod support;
 pub mod tensor;
+pub mod transformer;
 pub mod transpose;
 pub mod types;
 
@@ -118,11 +120,15 @@ pub use pooling::{avg_pool_s8, max_pool_s8};
 pub use recurrent::{LstmGateParams, lstm_step_s8_s16, lstm_step_s16, svdf_s8, svdf_state_s16_s8};
 pub use simd::{vec_dot_s8, vec_dot_s16};
 pub use slice::strided_slice_s8;
-pub use softmax::softmax_s8;
+pub use softmax::{softmax_last_axis_s8, softmax_s8};
 pub use subbyte::{convolve_s4, fully_connected_s4, pack_s4_pair, unpack_s4_pair};
 pub use tensor::{
     Quantized, StaticTensorView, Tensor2D, Tensor4D, avg_pool2d_forward, conv2d_forward,
     depthwise_conv2d_forward, fully_connected_forward, max_pool2d_forward, relu_forward,
     relu6_forward, softmax_forward,
+};
+pub use transformer::{
+    AttentionParams, RmsNormParams, batch_matmul_s8_shaped, integer_sqrt_u32, rms_norm_s8,
+    scaled_dot_product_attention_s8,
 };
 pub use transpose::{transpose_2d_s8, transpose_nd_s8, transpose_spatial_s8};

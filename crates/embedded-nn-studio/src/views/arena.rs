@@ -695,6 +695,35 @@ pub fn calculate_model_macs(graph: &embedded_nn_compiler::ir::ModelGraph) -> usi
                     total_macs += weights_feature.len();
                 }
             }
+            embedded_nn_compiler::ir::OpPayload::BatchMatMul { .. } => {
+                if let (Some(lhs), Some(out_t)) = (
+                    layer
+                        .inputs
+                        .first()
+                        .and_then(|id| graph.tensors.iter().find(|t| t.id == *id)),
+                    layer
+                        .outputs
+                        .first()
+                        .and_then(|id| graph.tensors.iter().find(|t| t.id == *id)),
+                ) {
+                    let (batches, rows, accum) = lhs.shape.as_batched_matrix();
+                    let cols = out_t.shape.channels.max(1);
+                    total_macs += batches * rows * accum * cols;
+                }
+            }
+            embedded_nn_compiler::ir::OpPayload::ScaledDotProductAttention {
+                num_heads, ..
+            } => {
+                if let Some(q) = layer
+                    .inputs
+                    .first()
+                    .and_then(|id| graph.tensors.iter().find(|t| t.id == *id))
+                {
+                    let seq = q.shape.height.max(q.shape.width);
+                    let head_dim = q.shape.channels / num_heads.max(&1);
+                    total_macs += q.shape.batches.max(1) * num_heads * seq * seq * head_dim * 2;
+                }
+            }
             _ => {}
         }
     }

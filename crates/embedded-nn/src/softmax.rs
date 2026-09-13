@@ -60,6 +60,30 @@ pub fn one_over_one_plus_x_for_x_in_0_1(val: i32) -> i32 {
     x.saturating_mul(2)
 }
 
+/// Softmax over the last packed dimension of an NHWC-style tensor.
+///
+/// `num_rows = batches * height * width` and `row_size = channels`, so a classifier
+/// vector `[1, 1, 1, C]` stays a single row while attention scores `[N, H, T, T]`
+/// softmax independently over keys.
+pub fn softmax_last_axis_s8(
+    input: &[i8],
+    batches: usize,
+    height: usize,
+    width: usize,
+    channels: usize,
+    mult: i32,
+    shift: i32,
+    diff_min: i32,
+    output: &mut [i8],
+) -> Result<()> {
+    let row_size = channels;
+    if row_size == 0 {
+        return Ok(());
+    }
+    let num_rows = batches.saturating_mul(height).saturating_mul(width);
+    softmax_s8(input, num_rows, row_size, mult, shift, diff_min, output)
+}
+
 /// Performs Softmax for int8 tensors.
 pub fn softmax_s8(
     input: &[i8],
@@ -242,5 +266,16 @@ mod tests {
         assert!(output[3] > output[0]);
         assert!(softmax_s16(&input, 1, 4, 1073741824, 20, -256, &mut output[..3]).is_err());
         assert!(softmax_s16(&input, 0, 4, 1073741824, 20, -256, &mut output).is_ok());
+    }
+
+    #[test]
+    fn softmax_last_axis_is_independent_per_row() {
+        let input = [10i8, 40, 10, 40];
+        let mut output = [0i8; 4];
+        softmax_last_axis_s8(&input, 1, 1, 2, 2, 1073741824, 20, -256, &mut output).unwrap();
+        assert!(output[1] > output[0]);
+        assert!(output[3] > output[2]);
+        assert_eq!(output[0], output[2]);
+        assert_eq!(output[1], output[3]);
     }
 }

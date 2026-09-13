@@ -11,7 +11,7 @@
 //! - Supported operators: `FULLY_CONNECTED`, `CONV_2D` (1-high kernels import as `Conv1D`),
 //!   `DEPTHWISE_CONV_2D`, `MAX_POOL_2D`, `AVERAGE_POOL_2D`, `SOFTMAX`, `RESHAPE`, `ADD`,
 //!   `TRANSPOSE` (general rank-1..4 perms), `PAD`/`PADV2`, `MEAN`, `SVDF`, `MUL`,
-//!   `CONCATENATION` (channel axis), `STRIDED_SLICE`, and BASIC `LSTM`.
+//!   `CONCATENATION` (channel axis), `STRIDED_SLICE`, BASIC `LSTM`, and `BATCH_MATMUL`.
 //! - SAME padding is represented exactly, including odd totals where bottom/right differ from
 //!   top/left. VALID padding is represented as zero on every side.
 //! - Per-channel quantization is respected for `CONV_2D`/`DEPTHWISE_CONV_2D`/`FULLY_CONNECTED`
@@ -263,6 +263,17 @@ pub fn import_tflite(bytes: &[u8]) -> Result<ModelGraph, ImportError> {
                 &output_tensor,
                 &layer_name,
             )?,
+            tflite::BuiltinOperator::BATCH_MATMUL => import_batch_matmul(
+                &mut builder,
+                &operator,
+                &tensors,
+                &tensor_ids,
+                &tensor_scales,
+                in_id,
+                input_scale,
+                &output_tensor,
+                &layer_name,
+            )?,
             tflite::BuiltinOperator::QUANTIZE | tflite::BuiltinOperator::DEQUANTIZE => {
                 let shape = convert_shape(&output_tensor)?;
                 builder.add_reshape_layer(layer_name.clone(), in_id, shape)
@@ -344,6 +355,7 @@ fn convert_shape(tensor: &tflite::Tensor) -> Result<TensorShape, ImportError> {
     Ok(match dims.len() {
         1 => TensorShape::new_1d(dims[0] as usize),
         2 => TensorShape::new_2d(dims[0] as usize, dims[1] as usize),
+        3 => TensorShape::new_4d(1, dims[0] as usize, dims[1] as usize, dims[2] as usize),
         4 => TensorShape::new_4d(1, dims[1] as usize, dims[2] as usize, dims[3] as usize),
         _ => TensorShape::new_1d(dims.iter().product::<i32>().max(0) as usize),
     })
@@ -1385,6 +1397,60 @@ fn import_lstm(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn import_batch_matmul(
+    builder: &mut ModelBuilder,
+    operator: &tflite::Operator,
+    tensors: &flatbuffers::Vector<flatbuffers::ForwardsUOffset<tflite::Tensor>>,
+    tensor_ids: &HashMap<usize, usize>,
+    tensor_scales: &HashMap<usize, f32>,
+    lhs_id: usize,
+    input_scale: f32,
+    output_tensor: &tflite::Tensor,
+    name: &str,
+) -> Result<usize, ImportError> {
+    let op_inputs = operator
+        .inputs()
+        .ok_or(ImportError::MissingField("operator.inputs"))?;
+    if op_inputs.len() < 2 {
+        return Err(ImportError::UnsupportedConfiguration(
+            "BATCH_MATMUL requires two inputs".into(),
+        ));
+    }
+    let rhs_idx = op_inputs.get(1);
+    if rhs_idx < 0 {
+        return Err(ImportError::UnsupportedConfiguration(
+            "BATCH_MATMUL RHS is absent".into(),
+        ));
+    }
+    let rhs_idx = rhs_idx as usize;
+    let rhs_id = *tensor_ids
+        .get(&rhs_idx)
+        .ok_or(ImportError::UnresolvedInput(rhs_idx))?;
+    convert_tensor_type(tensors.get(rhs_idx).type_())?;
+
+    let opts = operator.builtin_options_as_batch_mat_mul_options();
+    if opts.is_some_and(|o| o.adj_x()) {
+        return Err(ImportError::UnsupportedConfiguration(
+            "BATCH_MATMUL adj_x is not supported".into(),
+        ));
+    }
+    let rhs_transposed = opts.is_some_and(|o| o.adj_y());
+    let rhs_scale = *tensor_scales.get(&rhs_idx).unwrap_or(&1.0);
+    let (out_scale, out_zero_point) = read_per_tensor_quant(output_tensor)?;
+    let (multiplier, shift) =
+        calculate_output_requant_multiplier(input_scale, rhs_scale, out_scale);
+    let output_quant = QuantParams {
+        multiplier,
+        shift,
+        zero_point: out_zero_point,
+        scale: out_scale,
+    };
+    builder
+        .add_batch_matmul_layer(name, lhs_id, rhs_id, rhs_transposed, Some(output_quant))
+        .map_err(|message| ImportError::UnsupportedConfiguration(message.into()))
+}
+
 #[cfg(any(test, feature = "fixture-generation"))]
 pub mod constructed_fixtures {
     //! Hand-built `.tflite` FlatBuffer fixtures, constructed with the same generated schema
@@ -2340,13 +2406,124 @@ pub mod constructed_fixtures {
         fbb.finish_minimal(model);
         fbb.finished_data().to_vec()
     }
+
+    /// Two int8 graph inputs `[2, 2]` multiplied with `adj_y = true`.
+    pub fn build_batch_matmul_model() -> Vec<u8> {
+        build_batch_matmul_model_with(false, true, &[2, 2], &[2, 2], &[2, 2])
+    }
+
+    pub fn build_batch_matmul_adj_x_model() -> Vec<u8> {
+        build_batch_matmul_model_with(true, false, &[2, 2], &[2, 2], &[2, 2])
+    }
+
+    pub fn build_batch_matmul_rank3_model() -> Vec<u8> {
+        build_batch_matmul_model_with(false, false, &[1, 2, 2], &[1, 2, 2], &[1, 2, 2])
+    }
+
+    fn build_batch_matmul_model_with(
+        adj_x: bool,
+        adj_y: bool,
+        lhs_shape: &[i32],
+        rhs_shape: &[i32],
+        out_shape: &[i32],
+    ) -> Vec<u8> {
+        let mut fbb = FlatBufferBuilder::new();
+        let empty_buffer = Buffer::create(&mut fbb, &BufferArgs::default());
+        let buffers = fbb.create_vector(&[empty_buffer]);
+        let lhs = build_tensor(
+            &mut fbb,
+            &TensorSpec {
+                shape: lhs_shape,
+                buffer: 0,
+                scale: 1.0 / 127.0,
+                zero_point: 0,
+            },
+        );
+        let rhs = build_tensor(
+            &mut fbb,
+            &TensorSpec {
+                shape: rhs_shape,
+                buffer: 0,
+                scale: 1.0 / 127.0,
+                zero_point: 0,
+            },
+        );
+        let output = build_tensor(
+            &mut fbb,
+            &TensorSpec {
+                shape: out_shape,
+                buffer: 0,
+                scale: 1.0 / 127.0,
+                zero_point: 0,
+            },
+        );
+        let tensors = fbb.create_vector(&[lhs, rhs, output]);
+        let options = BatchMatMulOptions::create(
+            &mut fbb,
+            &BatchMatMulOptionsArgs {
+                adj_x,
+                adj_y,
+                asymmetric_quantize_inputs: false,
+            },
+        );
+        let op_inputs = fbb.create_vector(&[0i32, 1]);
+        let op_outputs = fbb.create_vector(&[2i32]);
+        let operator = Operator::create(
+            &mut fbb,
+            &OperatorArgs {
+                opcode_index: 0,
+                inputs: Some(op_inputs),
+                outputs: Some(op_outputs),
+                builtin_options_type: BuiltinOptions::BatchMatMulOptions,
+                builtin_options: Some(options.as_union_value()),
+                ..Default::default()
+            },
+        );
+        let operators = fbb.create_vector(&[operator]);
+        let graph_inputs = fbb.create_vector(&[0i32, 1]);
+        let graph_outputs = fbb.create_vector(&[2i32]);
+        let subgraph = SubGraph::create(
+            &mut fbb,
+            &SubGraphArgs {
+                tensors: Some(tensors),
+                inputs: Some(graph_inputs),
+                outputs: Some(graph_outputs),
+                operators: Some(operators),
+                name: None,
+            },
+        );
+        let subgraphs = fbb.create_vector(&[subgraph]);
+        let opcode = OperatorCode::create(
+            &mut fbb,
+            &OperatorCodeArgs {
+                deprecated_builtin_code: BuiltinOperator::BATCH_MATMUL.0 as i8,
+                version: 1,
+                builtin_code: BuiltinOperator::BATCH_MATMUL,
+                ..Default::default()
+            },
+        );
+        let opcodes = fbb.create_vector(&[opcode]);
+        let model = Model::create(
+            &mut fbb,
+            &ModelArgs {
+                version: 3,
+                operator_codes: Some(opcodes),
+                subgraphs: Some(subgraphs),
+                buffers: Some(buffers),
+                ..Default::default()
+            },
+        );
+        fbb.finish_minimal(model);
+        fbb.finished_data().to_vec()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::constructed_fixtures::{
-        build_add_transpose_model, build_conv_pool_reshape_fc_softmax_model,
+        build_add_transpose_model, build_batch_matmul_adj_x_model, build_batch_matmul_model,
+        build_batch_matmul_rank3_model, build_conv_pool_reshape_fc_softmax_model,
         build_conv2d_per_channel_model, build_fc_only_model, build_sine_fc_model,
         build_uint8_fc_model,
     };
@@ -2459,7 +2636,7 @@ mod tests {
         assert!(code.contains("convolve_s8") || code.contains("convolve_per_channel_s8"));
         assert!(code.contains("max_pool_s8"));
         assert!(code.contains("out_buf.copy_from_slice(in_buf)"));
-        assert!(code.contains("softmax_s8"));
+        assert!(code.contains("softmax_last_axis_s8"));
     }
 
     #[test]
@@ -2640,5 +2817,38 @@ mod tests {
             host.run(&[&[1i8, 2], &[3i8, 4]]).unwrap()[0],
             vec![1, 2, 3, 4]
         );
+    }
+
+    #[test]
+    fn test_import_batch_matmul_adj_y() {
+        let graph = import_tflite(&build_batch_matmul_model()).expect("import BMM");
+        assert_eq!(graph.layers.len(), 1);
+        match &graph.layers[0].op {
+            OpPayload::BatchMatMul { rhs_transposed } => assert!(*rhs_transposed),
+            other => panic!("expected BatchMatMul, got {other:?}"),
+        }
+        let code = embedded_nn_codegen::RustCodeGenerator::new("ImportedBmm").generate(&graph);
+        assert!(code.contains("batch_matmul_s8_shaped"));
+    }
+
+    #[test]
+    fn test_import_batch_matmul_rejects_adj_x() {
+        let err = import_tflite(&build_batch_matmul_adj_x_model()).unwrap_err();
+        assert!(err.to_string().contains("adj_x"));
+    }
+
+    #[test]
+    fn test_import_batch_matmul_rank3_shapes() {
+        let graph = import_tflite(&build_batch_matmul_rank3_model()).expect("rank3 BMM");
+        let out = graph
+            .tensors
+            .iter()
+            .find(|t| graph.outputs.contains(&t.id))
+            .unwrap();
+        assert_eq!(out.shape, TensorShape::new_4d(1, 1, 2, 2));
+        match &graph.layers[0].op {
+            OpPayload::BatchMatMul { rhs_transposed } => assert!(!*rhs_transposed),
+            other => panic!("expected BatchMatMul, got {other:?}"),
+        }
     }
 }

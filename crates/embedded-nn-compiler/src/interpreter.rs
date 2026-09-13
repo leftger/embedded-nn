@@ -9,13 +9,15 @@ use crate::ir::{
     TransposeKind,
 };
 use embedded_nn::{
-    Activation, ConvParams, Dims, DwConvParams, ElementwiseAddParams, ElementwiseMulParams,
-    FcParams, LstmGateParams, Padding2D, PerChannelQuantParams, PerTensorQuantParams, PoolParams,
-    Tile, avg_pool_s8, concatenation_s8, convolve_1_x_n_s8, convolve_per_channel_s8, convolve_s4,
-    convolve_s8, depthwise_conv_per_channel_s8, elementwise_add_s8, elementwise_mul_s8,
+    Activation, AttentionParams, ConvParams, Dims, DwConvParams, ElementwiseAddParams,
+    ElementwiseMulParams, FcParams, LstmGateParams, Padding2D, PerChannelQuantParams,
+    PerTensorQuantParams, PoolParams, RmsNormParams, Tile, avg_pool_s8, batch_matmul_s8_shaped,
+    concatenation_s8, convolve_1_x_n_s8, convolve_per_channel_s8, convolve_s4, convolve_s8,
+    depthwise_conv_per_channel_s8, elementwise_add_s8, elementwise_mul_s8,
     fully_connected_per_channel_s8, fully_connected_s4, fully_connected_s8, lstm_step_s8_s16,
-    max_pool_s8, pad_s8, reduce_mean_s8, softmax_s8, strided_slice_s8, svdf_s8, transpose_2d_s8,
-    transpose_nd_s8, transpose_spatial_s8,
+    max_pool_s8, pad_s8, reduce_mean_s8, rms_norm_s8, scaled_dot_product_attention_s8,
+    softmax_last_axis_s8, strided_slice_s8, svdf_s8, transpose_2d_s8, transpose_nd_s8,
+    transpose_spatial_s8,
 };
 use std::collections::HashMap;
 
@@ -179,8 +181,8 @@ impl<'g> HostInterpreter<'g> {
     }
 
     fn execute_layer(&mut self, layer: &LayerNode) -> Result<(), InterpreterError> {
-        if layer.outputs.len() != 1 || layer.inputs.is_empty() {
-            return Err(self.invalid(layer, "exactly one output and at least one input required"));
+        if layer.outputs.is_empty() || layer.inputs.is_empty() {
+            return Err(self.invalid(layer, "at least one output and one input required"));
         }
         let input_id = layer.inputs[0];
         let output_id = layer.outputs[0];
@@ -209,6 +211,27 @@ impl<'g> HostInterpreter<'g> {
                 };
                 let input_len = input.len();
                 let output_len = output.len();
+                let in_channels = input_tensor.shape.channels.max(1);
+                let out_channels = output_tensor.shape.channels.max(1);
+                let token_batches = input_len / in_channels;
+                let in_features_from_weights = if weights.is_empty() {
+                    in_channels
+                } else {
+                    weights.len() / out_channels.max(1)
+                };
+                let token_wise = packed_s4.is_none()
+                    && in_features_from_weights == in_channels
+                    && token_batches > 1
+                    && output_len == token_batches * out_channels;
+                let (batches, in_features, out_features) = if token_wise {
+                    (
+                        token_batches as i32,
+                        in_channels as i32,
+                        out_channels as i32,
+                    )
+                } else {
+                    (1, input_len as i32, output_len as i32)
+                };
                 if let Some(weights) = packed_s4 {
                     fully_connected_s4(
                         &params,
@@ -225,24 +248,24 @@ impl<'g> HostInterpreter<'g> {
                     fully_connected_per_channel_s8(
                         &params,
                         &PerChannelQuantParams::new(&quant.multipliers, &quant.shifts),
-                        &Dims::new(1, 1, 1, input_len as i32),
+                        &Dims::new(batches, 1, 1, in_features),
                         &input,
-                        &Dims::new(input_len as i32, 1, 1, output_len as i32),
+                        &Dims::new(in_features, 1, 1, out_features),
                         weights,
                         bias.as_deref(),
-                        &Dims::new(1, 1, 1, output_len as i32),
+                        &Dims::new(batches, 1, 1, out_features),
                         &mut output,
                     )
                 } else {
                     fully_connected_s8(
                         &params,
                         &per_tensor(&output_tensor),
-                        &Dims::new(1, 1, 1, input_len as i32),
+                        &Dims::new(batches, 1, 1, in_features),
                         &input,
-                        &Dims::new(input_len as i32, 1, 1, output_len as i32),
+                        &Dims::new(in_features, 1, 1, out_features),
                         weights,
                         bias.as_deref(),
-                        &Dims::new(1, 1, 1, output_len as i32),
+                        &Dims::new(batches, 1, 1, out_features),
                         &mut output,
                     )
                 }
@@ -383,9 +406,17 @@ impl<'g> HostInterpreter<'g> {
                 &dims(&output_tensor),
                 &mut output,
             ),
-            OpPayload::Softmax => {
-                softmax_s8(&input, 1, input.len(), 1_073_741_824, 20, -256, &mut output)
-            }
+            OpPayload::Softmax => softmax_last_axis_s8(
+                &input,
+                input_tensor.shape.batches,
+                input_tensor.shape.height,
+                input_tensor.shape.width,
+                input_tensor.shape.channels.max(1),
+                1_073_741_824,
+                20,
+                -256,
+                &mut output,
+            ),
             OpPayload::Reshape { .. } => {
                 if input.len() != output.len() {
                     return Err(self.invalid(layer, "reshape element counts differ"));
@@ -605,6 +636,97 @@ impl<'g> HostInterpreter<'g> {
                 self.lstm_cell.insert(layer_id, cell);
                 result
             }
+            OpPayload::BatchMatMul { rhs_transposed } => {
+                if layer.inputs.len() != 2 {
+                    return Err(self.invalid(layer, "BatchMatMul requires two inputs"));
+                }
+                let rhs_tensor = self.tensor(layer.inputs[1])?.clone();
+                let rhs = self.read_tensor(layer.inputs[1])?;
+                let (lhs_b, rows, accum) = input_tensor.shape.as_batched_matrix();
+                let (rhs_b, rhs_d0, rhs_d1) = rhs_tensor.shape.as_batched_matrix();
+                let (rhs_accum, cols) = if *rhs_transposed {
+                    (rhs_d1, rhs_d0)
+                } else {
+                    (rhs_d0, rhs_d1)
+                };
+                if accum != rhs_accum {
+                    return Err(self.invalid(layer, "BatchMatMul inner dimensions do not match"));
+                }
+                let batches = lhs_b.max(rhs_b);
+                batch_matmul_s8_shaped(
+                    -input_tensor.quant.zero_point,
+                    -rhs_tensor.quant.zero_point,
+                    output_tensor.quant.zero_point,
+                    &per_tensor(&output_tensor),
+                    batches,
+                    rows,
+                    accum,
+                    cols,
+                    &input,
+                    &rhs,
+                    *rhs_transposed,
+                    &mut output,
+                )
+            }
+            OpPayload::RmsNorm { gamma, epsilon } => rms_norm_s8(
+                &RmsNormParams::new(
+                    -input_tensor.quant.zero_point,
+                    output_tensor.quant.zero_point,
+                    input_tensor.shape.channels.max(1),
+                    *epsilon,
+                ),
+                &per_tensor(&output_tensor),
+                &input,
+                gamma.as_deref(),
+                &mut output,
+            ),
+            OpPayload::ScaledDotProductAttention {
+                num_heads,
+                logits_multiplier,
+                logits_shift,
+                softmax_mult,
+                softmax_shift,
+                softmax_diff_min,
+            } => {
+                if layer.inputs.len() != 3 {
+                    return Err(self.invalid(layer, "Attention requires Q, K, and V"));
+                }
+                let k = self.read_tensor(layer.inputs[1])?;
+                let v = self.read_tensor(layer.inputs[2])?;
+                let k_tensor = self.tensor(layer.inputs[1])?.clone();
+                let v_tensor = self.tensor(layer.inputs[2])?.clone();
+                let seq_len = input_tensor.shape.height.max(input_tensor.shape.width);
+                let d_model = input_tensor.shape.channels;
+                if *num_heads == 0 || d_model % *num_heads != 0 {
+                    return Err(self.invalid(layer, "invalid attention head configuration"));
+                }
+                let head_dim = d_model / *num_heads;
+                let mut scores = vec![0i8; seq_len * seq_len * 2];
+                let params = AttentionParams {
+                    batches: input_tensor.shape.batches.max(1),
+                    seq_len,
+                    num_heads: *num_heads,
+                    head_dim,
+                    q_offset: -input_tensor.quant.zero_point,
+                    k_offset: -k_tensor.quant.zero_point,
+                    v_offset: -v_tensor.quant.zero_point,
+                    score_offset: 128,
+                    output_offset: output_tensor.quant.zero_point,
+                    softmax_mult: *softmax_mult,
+                    softmax_shift: *softmax_shift,
+                    softmax_diff_min: *softmax_diff_min,
+                };
+                scaled_dot_product_attention_s8(
+                    &params,
+                    &PerTensorQuantParams::new(*logits_multiplier, *logits_shift),
+                    &per_tensor(&output_tensor),
+                    &input,
+                    &k,
+                    &v,
+                    &mut scores,
+                    &mut output,
+                )
+            }
         };
 
         kernel_result.map_err(|_| InterpreterError::Kernel {
@@ -704,6 +826,9 @@ fn op_name(op: &OpPayload) -> &'static str {
         OpPayload::LstmStep { .. } => "LstmStep",
         OpPayload::Conv1D { .. } => "Conv1D",
         OpPayload::Svdf { .. } => "SVDF",
+        OpPayload::BatchMatMul { .. } => "BatchMatMul",
+        OpPayload::RmsNorm { .. } => "RmsNorm",
+        OpPayload::ScaledDotProductAttention { .. } => "ScaledDotProductAttention",
     }
 }
 
@@ -881,5 +1006,151 @@ mod tests {
         let graph = builder.build();
         let mut host = HostInterpreter::new(&graph).unwrap();
         assert_eq!(host.run(&[&[1], &[2]]).unwrap(), vec![vec![1, 2]]);
+    }
+
+    #[test]
+    fn batch_matmul_and_last_axis_softmax_run() {
+        let mut builder = ModelBuilder::new("bmm_soft");
+        let lhs = builder.add_input(
+            "lhs",
+            TensorShape::new_2d(2, 2),
+            DataType::Int8,
+            Some(identity_quant()),
+        );
+        let rhs = builder.add_input(
+            "rhs",
+            TensorShape::new_2d(2, 2),
+            DataType::Int8,
+            Some(identity_quant()),
+        );
+        let mm = builder
+            .add_batch_matmul_layer("mm", lhs, rhs, false, Some(identity_quant()))
+            .unwrap();
+        let sm = builder.add_softmax("sm", mm);
+        builder.mark_output(sm);
+        let graph = builder.build();
+        let mut host = HostInterpreter::new(&graph).unwrap();
+        let out = host.run(&[&[1, 0, 0, 1], &[10, 20, 30, 40]]).unwrap();
+        assert_eq!(out[0].len(), 4);
+        assert!(out[0][1] > out[0][0]);
+        assert!(out[0][3] > out[0][2]);
+    }
+
+    #[test]
+    fn tiny_attention_encoder_runs() {
+        let tokens = TensorShape::new_4d(1, 2, 1, 4);
+        let mut builder = ModelBuilder::new("tiny_enc");
+        let q = builder.add_input("q", tokens, DataType::Int8, Some(identity_quant()));
+        let k = builder.add_input("k", tokens, DataType::Int8, Some(identity_quant()));
+        let v = builder.add_input("v", tokens, DataType::Int8, Some(identity_quant()));
+        let n = builder
+            .add_rms_norm_layer("n", q, None, 1, Some(identity_quant()))
+            .unwrap();
+        let attn = builder
+            .add_attention_layer("attn", n, k, v, 2, 1_073_741_824, 1, Some(identity_quant()))
+            .unwrap();
+        let ffn = builder.add_channel_dense_layer(
+            "ffn",
+            attn,
+            4,
+            vec![1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+            Some(vec![0, 0, 0, 0]),
+            ActivationType::Relu,
+            None,
+            Some(identity_quant()),
+        );
+        builder.mark_output(ffn);
+        let graph = builder.build();
+        let mut host = HostInterpreter::new(&graph).unwrap();
+        let x = [8i8, 0, 0, 8, 0, 8, 8, 0];
+        let out = host.run(&[&x, &x, &x]).unwrap();
+        assert_eq!(out[0].len(), 8);
+    }
+
+    #[test]
+    fn rms_norm_with_gamma_and_transposed_matmul() {
+        let mut builder = ModelBuilder::new("gamma");
+        let x = builder.add_input(
+            "x",
+            TensorShape::new_2d(2, 2),
+            DataType::Int8,
+            Some(identity_quant()),
+        );
+        let n = builder
+            .add_rms_norm_layer("n", x, Some(vec![127, 64]), 1, Some(identity_quant()))
+            .unwrap();
+        builder.mark_output(n);
+        let graph = builder.build();
+        assert_eq!(graph.total_weights_size_bytes(), 2);
+        let mut host = HostInterpreter::new(&graph).unwrap();
+        let out = host.run(&[&[16i8, -16, 16, -16]]).unwrap();
+        assert_eq!(out[0].len(), 4);
+
+        let mut bmm = ModelBuilder::new("bt");
+        let lhs = bmm.add_input(
+            "lhs",
+            TensorShape::new_2d(2, 2),
+            DataType::Int8,
+            Some(identity_quant()),
+        );
+        let rhs = bmm.add_input(
+            "rhs",
+            TensorShape::new_2d(2, 2),
+            DataType::Int8,
+            Some(identity_quant()),
+        );
+        let y = bmm
+            .add_batch_matmul_layer("mm", lhs, rhs, true, Some(identity_quant()))
+            .unwrap();
+        bmm.mark_output(y);
+        let graph = bmm.build();
+        let mut host = HostInterpreter::new(&graph).unwrap();
+        let out = host.run(&[&[1, 0, 0, 1], &[2, 4, 3, 5]]).unwrap();
+        assert_eq!(out[0], vec![2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn attention_and_matmul_report_invalid_layer_inputs() {
+        let mut graph = ModelGraph::new("bad_attn");
+        graph.tensors.push(TensorDesc {
+            id: 0,
+            name: "q".into(),
+            shape: TensorShape::new_4d(1, 2, 1, 4),
+            dtype: DataType::Int8,
+            quant: identity_quant(),
+        });
+        graph.tensors.push(TensorDesc {
+            id: 1,
+            name: "out".into(),
+            shape: TensorShape::new_4d(1, 2, 1, 4),
+            dtype: DataType::Int8,
+            quant: identity_quant(),
+        });
+        graph.inputs.push(0);
+        graph.outputs.push(1);
+        graph.layers.push(LayerNode {
+            id: 0,
+            name: "attn".into(),
+            inputs: vec![0],
+            outputs: vec![1],
+            op: OpPayload::ScaledDotProductAttention {
+                num_heads: 2,
+                logits_multiplier: 1_073_741_824,
+                logits_shift: 1,
+                softmax_mult: 1_073_741_824,
+                softmax_shift: 20,
+                softmax_diff_min: -256,
+            },
+        });
+        let mut host = HostInterpreter::new(&graph).unwrap();
+        let err = host.run(&[&[1i8; 8]]).unwrap_err();
+        assert!(matches!(err, InterpreterError::InvalidLayer { .. }));
+
+        graph.layers[0].op = OpPayload::BatchMatMul {
+            rhs_transposed: false,
+        };
+        let mut host = HostInterpreter::new(&graph).unwrap();
+        let err = host.run(&[&[1i8; 8]]).unwrap_err();
+        assert!(matches!(err, InterpreterError::InvalidLayer { .. }));
     }
 }

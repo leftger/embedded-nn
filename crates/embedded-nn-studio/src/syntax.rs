@@ -314,8 +314,17 @@ fn classify_rust_word(
             num_col
         }
         s if s.chars().next().is_some_and(|c| c.is_uppercase()) => type_col,
-        "new" | "predict" | "fully_connected_s8" | "fully_connected_s4" | "softmax_s8"
-        | "convolve_s8" | "unwrap" => fn_col,
+        "new"
+        | "predict"
+        | "fully_connected_s8"
+        | "fully_connected_s4"
+        | "softmax_s8"
+        | "softmax_last_axis_s8"
+        | "rms_norm_s8"
+        | "scaled_dot_product_attention_s8"
+        | "batch_matmul_s8_shaped"
+        | "convolve_s8"
+        | "unwrap" => fn_col,
         _ => text_col,
     }
 }

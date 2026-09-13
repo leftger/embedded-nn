@@ -1054,6 +1054,228 @@ impl ModelBuilder {
         }
     }
 
+    /// Token-wise (last-axis) fully connected: output keeps the input's leading dims.
+    pub fn add_channel_dense_layer(
+        &mut self,
+        name: impl Into<String>,
+        input_id: usize,
+        out_features: usize,
+        weights: Vec<i8>,
+        bias: Option<Vec<i32>>,
+        activation: ActivationType,
+        per_channel_quant: Option<PerChannelQuant>,
+        output_quant: Option<QuantParams>,
+    ) -> usize {
+        let input_tensor = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == input_id)
+            .expect("Input tensor not found");
+        let mut out_shape = input_tensor.shape;
+        out_shape.channels = out_features;
+        let out_dtype = input_tensor.dtype;
+        let out_id = self.next_tensor_id;
+        self.next_tensor_id += 1;
+        let layer_name = name.into();
+        self.graph.tensors.push(TensorDesc {
+            id: out_id,
+            name: format!("{}_out", layer_name),
+            shape: out_shape,
+            dtype: out_dtype,
+            quant: output_quant.unwrap_or_default(),
+        });
+        let layer_id = self.next_layer_id;
+        self.next_layer_id += 1;
+        self.graph.layers.push(LayerNode {
+            id: layer_id,
+            name: layer_name,
+            inputs: vec![input_id],
+            outputs: vec![out_id],
+            op: OpPayload::FullyConnected {
+                weights,
+                packed_s4: None,
+                bias,
+                filter_offset: 0,
+                activation,
+                per_channel_quant,
+            },
+        });
+        out_id
+    }
+
+    pub fn add_batch_matmul_layer(
+        &mut self,
+        name: impl Into<String>,
+        lhs_id: usize,
+        rhs_id: usize,
+        rhs_transposed: bool,
+        output_quant: Option<QuantParams>,
+    ) -> Result<usize, &'static str> {
+        let lhs = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == lhs_id)
+            .ok_or("BatchMatMul LHS tensor not found")?;
+        let rhs = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == rhs_id)
+            .ok_or("BatchMatMul RHS tensor not found")?;
+        if lhs.dtype != DataType::Int8 || rhs.dtype != DataType::Int8 {
+            return Err("BatchMatMul only supports int8 tensors");
+        }
+        let (lhs_b, lhs_rows, lhs_accum) = lhs.shape.as_batched_matrix();
+        let (rhs_b, rhs_dim0, rhs_dim1) = rhs.shape.as_batched_matrix();
+        let (rhs_accum, rhs_cols) = if rhs_transposed {
+            (rhs_dim1, rhs_dim0)
+        } else {
+            (rhs_dim0, rhs_dim1)
+        };
+        if lhs_accum != rhs_accum {
+            return Err("BatchMatMul inner dimensions do not match");
+        }
+        if lhs_b != rhs_b && lhs_b != 1 && rhs_b != 1 {
+            return Err("BatchMatMul batch dimensions do not match");
+        }
+        let out_shape = TensorShape {
+            batches: lhs.shape.batches.max(rhs.shape.batches),
+            height: lhs.shape.height.max(rhs.shape.height),
+            width: lhs_rows,
+            channels: rhs_cols,
+        };
+        let out_id = self.next_tensor_id;
+        self.next_tensor_id += 1;
+        let layer_name = name.into();
+        self.graph.tensors.push(TensorDesc {
+            id: out_id,
+            name: format!("{}_out", layer_name),
+            shape: out_shape,
+            dtype: DataType::Int8,
+            quant: output_quant.unwrap_or_default(),
+        });
+        let layer_id = self.next_layer_id;
+        self.next_layer_id += 1;
+        self.graph.layers.push(LayerNode {
+            id: layer_id,
+            name: layer_name,
+            inputs: vec![lhs_id, rhs_id],
+            outputs: vec![out_id],
+            op: OpPayload::BatchMatMul { rhs_transposed },
+        });
+        Ok(out_id)
+    }
+
+    pub fn add_rms_norm_layer(
+        &mut self,
+        name: impl Into<String>,
+        input_id: usize,
+        gamma: Option<Vec<i8>>,
+        epsilon: u32,
+        output_quant: Option<QuantParams>,
+    ) -> Result<usize, &'static str> {
+        let input_tensor = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == input_id)
+            .ok_or("RMSNorm input tensor not found")?;
+        if let Some(gamma) = gamma.as_ref() {
+            if gamma.len() != input_tensor.shape.channels {
+                return Err("RMSNorm gamma must match the last axis");
+            }
+        }
+        let shape = input_tensor.shape;
+        let dtype = input_tensor.dtype;
+        let out_id = self.next_tensor_id;
+        self.next_tensor_id += 1;
+        let layer_name = name.into();
+        self.graph.tensors.push(TensorDesc {
+            id: out_id,
+            name: format!("{}_out", layer_name),
+            shape,
+            dtype,
+            quant: output_quant.unwrap_or_default(),
+        });
+        let layer_id = self.next_layer_id;
+        self.next_layer_id += 1;
+        self.graph.layers.push(LayerNode {
+            id: layer_id,
+            name: layer_name,
+            inputs: vec![input_id],
+            outputs: vec![out_id],
+            op: OpPayload::RmsNorm { gamma, epsilon },
+        });
+        Ok(out_id)
+    }
+
+    pub fn add_attention_layer(
+        &mut self,
+        name: impl Into<String>,
+        q_id: usize,
+        k_id: usize,
+        v_id: usize,
+        num_heads: usize,
+        logits_multiplier: i32,
+        logits_shift: i32,
+        output_quant: Option<QuantParams>,
+    ) -> Result<usize, &'static str> {
+        let q = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == q_id)
+            .ok_or("Attention Q tensor not found")?;
+        let k = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == k_id)
+            .ok_or("Attention K tensor not found")?;
+        let v = self
+            .graph
+            .tensors
+            .iter()
+            .find(|t| t.id == v_id)
+            .ok_or("Attention V tensor not found")?;
+        if q.shape != k.shape || q.shape != v.shape {
+            return Err("Attention Q, K, and V must have the same shape");
+        }
+        if num_heads == 0 || q.shape.channels % num_heads != 0 {
+            return Err("Attention d_model must be divisible by num_heads");
+        }
+        let shape = q.shape;
+        let out_id = self.next_tensor_id;
+        self.next_tensor_id += 1;
+        let layer_name = name.into();
+        self.graph.tensors.push(TensorDesc {
+            id: out_id,
+            name: format!("{}_out", layer_name),
+            shape,
+            dtype: DataType::Int8,
+            quant: output_quant.unwrap_or_default(),
+        });
+        let layer_id = self.next_layer_id;
+        self.next_layer_id += 1;
+        self.graph.layers.push(LayerNode {
+            id: layer_id,
+            name: layer_name,
+            inputs: vec![q_id, k_id, v_id],
+            outputs: vec![out_id],
+            op: OpPayload::ScaledDotProductAttention {
+                num_heads,
+                logits_multiplier,
+                logits_shift,
+                softmax_mult: 1_073_741_824,
+                softmax_shift: 20,
+                softmax_diff_min: -256,
+            },
+        });
+        Ok(out_id)
+    }
+
     pub fn add_softmax(&mut self, name: impl Into<String>, input_id: usize) -> usize {
         let input_tensor = self
             .graph
@@ -1485,5 +1707,108 @@ mod tests {
             TensorShape::new_2d(3, 2)
         );
         assert!(builder.add_transpose_layer("id", matrix, &[0, 1]).is_ok());
+    }
+
+    #[test]
+    fn transformer_builders_preserve_sequence_shapes() {
+        let mut builder = ModelBuilder::new("tiny_attn");
+        let tokens = TensorShape::new_4d(1, 4, 1, 8);
+        let q = builder.add_input("q", tokens, DataType::Int8, None);
+        let k = builder.add_input("k", tokens, DataType::Int8, None);
+        let v = builder.add_input("v", tokens, DataType::Int8, None);
+        let normed = builder
+            .add_rms_norm_layer("norm", q, None, 1, None)
+            .unwrap();
+        let attn = builder
+            .add_attention_layer("attn", normed, k, v, 2, 1_073_741_824, 1, None)
+            .unwrap();
+        let ffn = builder.add_channel_dense_layer(
+            "ffn",
+            attn,
+            8,
+            vec![1i8; 8 * 8],
+            None,
+            ActivationType::Relu,
+            None,
+            None,
+        );
+        builder.mark_output(ffn);
+        let graph = builder.build();
+        assert_eq!(graph.tensors.last().unwrap().shape, tokens);
+        assert!(matches!(
+            graph.layers[1].op,
+            OpPayload::ScaledDotProductAttention { num_heads: 2, .. }
+        ));
+    }
+
+    #[test]
+    fn batch_matmul_builder_uses_last_two_dims() {
+        let mut builder = ModelBuilder::new("bmm");
+        let lhs = builder.add_input("lhs", TensorShape::new_2d(2, 3), DataType::Int8, None);
+        let rhs = builder.add_input("rhs", TensorShape::new_2d(3, 4), DataType::Int8, None);
+        let out = builder
+            .add_batch_matmul_layer("bmm", lhs, rhs, false, None)
+            .unwrap();
+        assert_eq!(
+            builder
+                .graph
+                .tensors
+                .iter()
+                .find(|t| t.id == out)
+                .unwrap()
+                .shape,
+            TensorShape::new_2d(2, 4)
+        );
+    }
+
+    #[test]
+    fn transformer_builder_rejects_mismatched_shapes() {
+        let mut builder = ModelBuilder::new("bad");
+        let lhs = builder.add_input("lhs", TensorShape::new_2d(2, 3), DataType::Int8, None);
+        let rhs = builder.add_input("rhs", TensorShape::new_2d(4, 4), DataType::Int8, None);
+        assert!(
+            builder
+                .add_batch_matmul_layer("mm", lhs, rhs, false, None)
+                .is_err()
+        );
+        assert!(
+            builder
+                .add_batch_matmul_layer("mm", 99, rhs, false, None)
+                .is_err()
+        );
+        assert!(
+            builder
+                .add_rms_norm_layer("n", lhs, Some(vec![1, 2]), 1, None)
+                .is_err()
+        );
+        assert!(builder.add_rms_norm_layer("n", 99, None, 1, None).is_err());
+
+        let tokens = TensorShape::new_4d(1, 2, 1, 4);
+        let q = builder.add_input("q", tokens, DataType::Int8, None);
+        let k = builder.add_input("k", tokens, DataType::Int8, None);
+        let other = builder.add_input("v", TensorShape::new_4d(1, 2, 1, 8), DataType::Int8, None);
+        assert!(
+            builder
+                .add_attention_layer("a", q, k, other, 2, 1, 0, None)
+                .is_err()
+        );
+        assert!(
+            builder
+                .add_attention_layer("a", q, k, k, 3, 1, 0, None)
+                .is_err()
+        );
+        let gamma = builder
+            .add_rms_norm_layer("ok", q, Some(vec![1, 2, 3, 4]), 1, None)
+            .unwrap();
+        assert_eq!(
+            builder
+                .graph
+                .tensors
+                .iter()
+                .find(|t| t.id == gamma)
+                .unwrap()
+                .shape,
+            tokens
+        );
     }
 }

@@ -261,6 +261,18 @@ impl RustCodeGenerator {
             .layers
             .iter()
             .any(|l| matches!(l.op, OpPayload::LstmStep { .. }));
+        let has_bmm = graph
+            .layers
+            .iter()
+            .any(|l| matches!(l.op, OpPayload::BatchMatMul { .. }));
+        let has_rms = graph
+            .layers
+            .iter()
+            .any(|l| matches!(l.op, OpPayload::RmsNorm { .. }));
+        let has_attn = graph
+            .layers
+            .iter()
+            .any(|l| matches!(l.op, OpPayload::ScaledDotProductAttention { .. }));
         let has_transpose_2d = graph.layers.iter().any(|l| {
             matches!(
                 l.op,
@@ -296,7 +308,9 @@ impl RustCodeGenerator {
         out.push_str("// Zero-allocation no_std neural network inference pipeline.\n\n");
         out.push_str("use embedded_nn::{\n");
         out.push_str("    Activation, Dims, FcParams, PerTensorQuantParams, Tensor2D, Tensor4D,\n");
-        out.push_str("    fully_connected_s8, fully_connected_s4, softmax_s8,\n");
+        out.push_str(
+            "    fully_connected_s8, fully_connected_s4, softmax_s8, softmax_last_axis_s8,\n",
+        );
         if has_conv1d {
             out.push_str("    convolve_1_x_n_s8,\n");
         }
@@ -353,6 +367,15 @@ impl RustCodeGenerator {
         }
         if has_lstm {
             out.push_str("    lstm_step_s8_s16, LstmGateParams,\n");
+        }
+        if has_bmm {
+            out.push_str("    batch_matmul_s8_shaped,\n");
+        }
+        if has_rms {
+            out.push_str("    rms_norm_s8, RmsNormParams,\n");
+        }
+        if has_attn {
+            out.push_str("    scaled_dot_product_attention_s8, AttentionParams,\n");
         }
         if has_transpose_2d {
             out.push_str("    transpose_2d_s8,\n");
@@ -529,7 +552,14 @@ impl RustCodeGenerator {
                 | OpPayload::Mean { .. }
                 | OpPayload::ElementwiseMul { .. }
                 | OpPayload::Concat
-                | OpPayload::StridedSlice { .. } => {}
+                | OpPayload::StridedSlice { .. }
+                | OpPayload::BatchMatMul { .. }
+                | OpPayload::ScaledDotProductAttention { .. } => {}
+                OpPayload::RmsNorm { gamma, .. } => {
+                    if let Some(g) = gamma {
+                        emit_i8_array(&mut out, &format!("{}_GAMMA_S8", prefix), g);
+                    }
+                }
                 OpPayload::LstmStep {
                     input_weights,
                     recurrent_weights,
@@ -696,6 +726,21 @@ impl RustCodeGenerator {
                     input2_offset, input2_len
                 ));
             }
+            if layer.inputs.len() > 2 {
+                let input3_id = layer.inputs[2];
+                let input3_offset = arena_plan.offset_of(input3_id).unwrap_or(0);
+                let input3_len = graph
+                    .tensors
+                    .iter()
+                    .find(|tensor| tensor.id == input3_id)
+                    .unwrap()
+                    .shape
+                    .total_elements();
+                out.push_str(&format!(
+                    "        let in_buf3 = unsafe {{ core::slice::from_raw_parts(arena.as_ptr().add({}) as *const i8, {}) }};\n",
+                    input3_offset, input3_len
+                ));
+            }
             out.push_str(&format!(
                 "        let out_buf = unsafe {{ core::slice::from_raw_parts_mut(arena.as_mut_ptr().add({}) as *mut i8, {}) }};\n",
                 out_offset, out_len
@@ -737,6 +782,18 @@ impl RustCodeGenerator {
                     ));
                     out.push_str("        };\n");
 
+                    let in_channels = in_t.shape.channels.max(1);
+                    let out_channels = out_t.shape.channels.max(1);
+                    let token_batches = in_len / in_channels;
+                    let token_wise = packed_s4.is_none()
+                        && in_channels != in_len
+                        && out_len == token_batches * out_channels;
+                    let (fc_batches, fc_in, fc_out) = if token_wise {
+                        (token_batches, in_channels, out_channels)
+                    } else {
+                        (1, in_len, out_len)
+                    };
+
                     if packed_s4.is_some() {
                         out.push_str(&format!(
                             "        let quant_params = PerTensorQuantParams::new({}, {});\n",
@@ -752,8 +809,8 @@ impl RustCodeGenerator {
                             prefix, prefix
                         ));
                         out.push_str(&format!(
-                            "        fully_connected_per_channel_s8(\n            &fc_params,\n            &quant_params,\n            &Dims::new(1, 1, 1, {}),\n            in_buf,\n            &Dims::new({}, 1, 1, {}),\n            &{}_WEIGHTS_S8,\n            {},\n            &Dims::new(1, 1, 1, {}),\n            out_buf,\n        ).map_err(|_| \"FC per-channel s8 execution failed\")?;\n\n",
-                            in_len, in_len, out_len, prefix, bias_ref, out_len
+                            "        fully_connected_per_channel_s8(\n            &fc_params,\n            &quant_params,\n            &Dims::new({}, 1, 1, {}),\n            in_buf,\n            &Dims::new({}, 1, 1, {}),\n            &{}_WEIGHTS_S8,\n            {},\n            &Dims::new({}, 1, 1, {}),\n            out_buf,\n        ).map_err(|_| \"FC per-channel s8 execution failed\")?;\n\n",
+                            fc_batches, fc_in, fc_in, fc_out, prefix, bias_ref, fc_batches, fc_out
                         ));
                     } else {
                         out.push_str(&format!(
@@ -761,8 +818,8 @@ impl RustCodeGenerator {
                             out_t.quant.multiplier, out_t.quant.shift
                         ));
                         out.push_str(&format!(
-                            "        fully_connected_s8(\n            &fc_params,\n            &quant_params,\n            &Dims::new(1, 1, 1, {}),\n            in_buf,\n            &Dims::new({}, 1, 1, {}),\n            &{}_WEIGHTS_S8,\n            {},\n            &Dims::new(1, 1, 1, {}),\n            out_buf,\n        ).map_err(|_| \"FC s8 execution failed\")?;\n\n",
-                            in_len, in_len, out_len, prefix, bias_ref, out_len
+                            "        fully_connected_s8(\n            &fc_params,\n            &quant_params,\n            &Dims::new({}, 1, 1, {}),\n            in_buf,\n            &Dims::new({}, 1, 1, {}),\n            &{}_WEIGHTS_S8,\n            {},\n            &Dims::new({}, 1, 1, {}),\n            out_buf,\n        ).map_err(|_| \"FC s8 execution failed\")?;\n\n",
+                            fc_batches, fc_in, fc_in, fc_out, prefix, bias_ref, fc_batches, fc_out
                         ));
                     }
                 }
@@ -978,8 +1035,8 @@ impl RustCodeGenerator {
                 }
                 OpPayload::Softmax => {
                     out.push_str(&format!(
-                        "        softmax_s8(\n            in_buf,\n            1,\n            {},\n            1073741824,\n            20,\n            -256,\n            out_buf,\n        ).map_err(|_| \"Softmax s8 execution failed\")?;\n\n",
-                        in_len
+                        "        softmax_last_axis_s8(\n            in_buf,\n            {},\n            {},\n            {},\n            {},\n            1073741824,\n            20,\n            -256,\n            out_buf,\n        ).map_err(|_| \"Softmax s8 execution failed\")?;\n\n",
+                        in_t.shape.batches, in_t.shape.height, in_t.shape.width, in_t.shape.channels.max(1)
                     ));
                 }
                 OpPayload::Reshape { .. } => {
@@ -1092,6 +1149,109 @@ impl RustCodeGenerator {
                         off,
                         off + hidden_dim
                     ));
+                }
+                OpPayload::BatchMatMul { rhs_transposed } => {
+                    let rhs_t = graph
+                        .tensors
+                        .iter()
+                        .find(|t| t.id == layer.inputs[1])
+                        .unwrap();
+                    let (lhs_b, rows, accum) = in_t.shape.as_batched_matrix();
+                    let (rhs_b, rhs_d0, rhs_d1) = rhs_t.shape.as_batched_matrix();
+                    let (rhs_accum, cols) = if *rhs_transposed {
+                        (rhs_d1, rhs_d0)
+                    } else {
+                        (rhs_d0, rhs_d1)
+                    };
+                    let _ = rhs_accum;
+                    let batches = lhs_b.max(rhs_b);
+                    out.push_str(&format!(
+                        "        let quant_params = PerTensorQuantParams::new({}, {});\n",
+                        out_t.quant.multiplier, out_t.quant.shift
+                    ));
+                    out.push_str(&format!(
+                        "        batch_matmul_s8_shaped(\n            {},\n            {},\n            {},\n            &quant_params,\n            {}, {}, {}, {},\n            in_buf,\n            in_buf2,\n            {},\n            out_buf,\n        ).map_err(|_| \"BatchMatMul s8 execution failed\")?;\n\n",
+                        -in_t.quant.zero_point,
+                        -rhs_t.quant.zero_point,
+                        out_t.quant.zero_point,
+                        batches,
+                        rows,
+                        accum,
+                        cols,
+                        rhs_transposed
+                    ));
+                }
+                OpPayload::RmsNorm { gamma, epsilon } => {
+                    let gamma_ref = if gamma.is_some() {
+                        format!("Some(&{}_GAMMA_S8)", prefix)
+                    } else {
+                        "None".into()
+                    };
+                    out.push_str(&format!(
+                        "        let rms_params = RmsNormParams::new({}, {}, {}, {});\n",
+                        -in_t.quant.zero_point,
+                        out_t.quant.zero_point,
+                        in_t.shape.channels.max(1),
+                        epsilon
+                    ));
+                    out.push_str(&format!(
+                        "        let quant_params = PerTensorQuantParams::new({}, {});\n",
+                        out_t.quant.multiplier, out_t.quant.shift
+                    ));
+                    out.push_str(&format!(
+                        "        rms_norm_s8(&rms_params, &quant_params, in_buf, {}, out_buf)\n            .map_err(|_| \"RMSNorm s8 execution failed\")?;\n\n",
+                        gamma_ref
+                    ));
+                }
+                OpPayload::ScaledDotProductAttention {
+                    num_heads,
+                    logits_multiplier,
+                    logits_shift,
+                    softmax_mult,
+                    softmax_shift,
+                    softmax_diff_min,
+                } => {
+                    let k_t = graph
+                        .tensors
+                        .iter()
+                        .find(|t| t.id == layer.inputs[1])
+                        .unwrap();
+                    let v_t = graph
+                        .tensors
+                        .iter()
+                        .find(|t| t.id == layer.inputs[2])
+                        .unwrap();
+                    let seq_len = in_t.shape.height.max(in_t.shape.width);
+                    let head_dim = in_t.shape.channels / num_heads.max(&1);
+                    out.push_str(&format!(
+                        "        let attn_params = AttentionParams {{\n            batches: {},\n            seq_len: {},\n            num_heads: {},\n            head_dim: {},\n            q_offset: {},\n            k_offset: {},\n            v_offset: {},\n            score_offset: 128,\n            output_offset: {},\n            softmax_mult: {},\n            softmax_shift: {},\n            softmax_diff_min: {},\n        }};\n",
+                        in_t.shape.batches.max(1),
+                        seq_len,
+                        num_heads,
+                        head_dim,
+                        -in_t.quant.zero_point,
+                        -k_t.quant.zero_point,
+                        -v_t.quant.zero_point,
+                        out_t.quant.zero_point,
+                        softmax_mult,
+                        softmax_shift,
+                        softmax_diff_min
+                    ));
+                    out.push_str(&format!(
+                        "        let logits_quant = PerTensorQuantParams::new({}, {});\n",
+                        logits_multiplier, logits_shift
+                    ));
+                    out.push_str(&format!(
+                        "        let out_quant = PerTensorQuantParams::new({}, {});\n",
+                        out_t.quant.multiplier, out_t.quant.shift
+                    ));
+                    out.push_str(&format!(
+                        "        let mut attn_scores = [0i8; {}];\n",
+                        2 * seq_len * seq_len
+                    ));
+                    out.push_str(
+                        "        scaled_dot_product_attention_s8(\n            &attn_params,\n            &logits_quant,\n            &out_quant,\n            in_buf,\n            in_buf2,\n            in_buf3,\n            &mut attn_scores,\n            out_buf,\n        ).map_err(|_| \"Attention s8 execution failed\")?;\n\n",
+                    );
                 }
             }
         }
@@ -2161,5 +2321,63 @@ mod tests {
         nd_builder.mark_output(t_out);
         let nd_code = RustCodeGenerator::new("NdT").generate(&nd_builder.build());
         assert!(nd_code.contains("transpose_nd_s8"));
+    }
+
+    #[test]
+    fn test_generate_tiny_transformer_kernels() {
+        let tokens = TensorShape::new_4d(1, 2, 1, 4);
+        let mut builder = ModelBuilder::new("TinyEnc");
+        let q = builder.add_input("q", tokens, DataType::Int8, None);
+        let k = builder.add_input("k", tokens, DataType::Int8, None);
+        let v = builder.add_input("v", tokens, DataType::Int8, None);
+        let n = builder
+            .add_rms_norm_layer("norm", q, None, 1, None)
+            .unwrap();
+        let attn = builder
+            .add_attention_layer("attn", n, k, v, 2, 1_073_741_824, 1, None)
+            .unwrap();
+        builder.mark_output(attn);
+        let code = RustCodeGenerator::new("TinyEnc").generate(&builder.build());
+        assert!(code.contains("rms_norm_s8"));
+        assert!(code.contains("scaled_dot_product_attention_s8"));
+        assert!(code.contains("let mut attn_scores"));
+
+        let mut bmm = ModelBuilder::new("BmmNet");
+        let lhs = bmm.add_input("lhs", TensorShape::new_2d(2, 2), DataType::Int8, None);
+        let rhs = bmm.add_input("rhs", TensorShape::new_2d(2, 2), DataType::Int8, None);
+        let out = bmm
+            .add_batch_matmul_layer("mm", lhs, rhs, true, None)
+            .unwrap();
+        bmm.mark_output(out);
+        let bmm_code = RustCodeGenerator::new("BmmNet").generate(&bmm.build());
+        assert!(bmm_code.contains("batch_matmul_s8_shaped"));
+        let sm = {
+            let mut s = ModelBuilder::new("Sm");
+            let x = s.add_input("x", TensorShape::new_2d(2, 2), DataType::Int8, None);
+            let y = s.add_softmax("sm", x);
+            s.mark_output(y);
+            RustCodeGenerator::new("Sm").generate(&s.build())
+        };
+        assert!(sm.contains("softmax_last_axis_s8"));
+
+        let mut gamma = ModelBuilder::new("GammaNet");
+        let x = gamma.add_input("x", TensorShape::new_2d(2, 2), DataType::Int8, None);
+        let n = gamma
+            .add_rms_norm_layer("norm", x, Some(vec![1, 2]), 1, None)
+            .unwrap();
+        let ffn = gamma.add_channel_dense_layer(
+            "ffn",
+            n,
+            2,
+            vec![1, 0, 0, 1],
+            None,
+            ActivationType::Relu,
+            None,
+            None,
+        );
+        gamma.mark_output(ffn);
+        let code = RustCodeGenerator::new("GammaNet").generate(&gamma.build());
+        assert!(code.contains("NORM_GAMMA_S8"));
+        assert!(code.contains("Dims::new(2, 1, 1, 2)"));
     }
 }
