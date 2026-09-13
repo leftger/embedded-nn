@@ -1,11 +1,7 @@
+# Score only the core embedded-nn crate. Sibling crates (live, studio, cli, …)
+# and non-library trees are excluded from Codecov.
 ignore:
-  - "embedded-nn-cli/**"
-  - "crates/embedded-nn-cli/**"
-  - "embedded-nn-studio/**"
-  - "crates/embedded-nn-studio/**"
-  - "embedded-nn-tflite/schema/**"
-  - "crates/embedded-nn-tflite/schema/**"
-  - "**/schema_generated.rs"
+  - "crates/embedded-nn-*/**"
   - "examples/**"
   - "analysis/**"
   - "assets/**"
@@ -17,7 +13,11 @@ coverage:
       default:
         target: auto
         threshold: 1%
+        paths:
+          - crates/embedded-nn
     patch:
       default:
         target: 60%
         threshold: 1%
+        paths:
+          - crates/embedded-nn
