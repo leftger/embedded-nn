@@ -9,7 +9,39 @@ pub fn vec_dot_s8(lhs: &[i8], rhs: &[i8], lhs_offset: i32) -> i32 {
     let len = lhs.len().min(rhs.len());
     let mut acc: i32 = 0;
 
-    #[cfg(all(target_arch = "arm", target_feature = "dsp"))]
+    #[cfg(all(target_arch = "arm", target_feature = "mve"))]
+    {
+        // Target ARMv8.1-M MVE (Helium) vector acceleration (Cortex-M55 / Cortex-M85).
+        // 16-element (128-bit vector) chunks allow LLVM to generate vldrb and vmladava vector instructions.
+        let chunks = len / 16;
+        let remainder = len % 16;
+
+        let mut i = 0;
+        for _ in 0..chunks {
+            let mut chunk_acc: i32 = 0;
+            for k in 0..16 {
+                let l = lhs[i + k] as i32 + lhs_offset;
+                let r = rhs[i + k] as i32;
+                chunk_acc += l * r;
+            }
+            acc += chunk_acc;
+            i += 16;
+        }
+
+        for j in 0..remainder {
+            let l = lhs[i + j] as i32 + lhs_offset;
+            let r = rhs[i + j] as i32;
+            acc += l * r;
+        }
+
+        acc
+    }
+
+    #[cfg(all(
+        target_arch = "arm",
+        target_feature = "dsp",
+        not(target_feature = "mve")
+    ))]
     {
         // Target ARM DSP hardware acceleration (Cortex-M4/M7 SMLAD)
         let chunks = len / 2;
@@ -79,7 +111,10 @@ pub fn vec_dot_s8(lhs: &[i8], rhs: &[i8], lhs_offset: i32) -> i32 {
     }
 
     #[cfg(not(any(
-        all(target_arch = "arm", target_feature = "dsp"),
+        all(
+            target_arch = "arm",
+            any(target_feature = "mve", target_feature = "dsp")
+        ),
         target_arch = "riscv32"
     )))]
     {
@@ -128,7 +163,35 @@ pub fn vec_dot_s16(lhs: &[i16], rhs: &[i16]) -> i64 {
     let len = lhs.len().min(rhs.len());
     let mut acc: i64 = 0;
 
-    #[cfg(all(target_arch = "arm", target_feature = "dsp"))]
+    #[cfg(all(target_arch = "arm", target_feature = "mve"))]
+    {
+        // Target ARMv8.1-M MVE (Helium) vector acceleration (Cortex-M55 / Cortex-M85).
+        // 8-element (128-bit vector) chunks for 16-bit signed integer dot products.
+        let chunks = len / 8;
+        let remainder = len % 8;
+
+        let mut i = 0;
+        for _ in 0..chunks {
+            let mut chunk_acc: i64 = 0;
+            for k in 0..8 {
+                chunk_acc += (lhs[i + k] as i64) * (rhs[i + k] as i64);
+            }
+            acc += chunk_acc;
+            i += 8;
+        }
+
+        for j in 0..remainder {
+            acc += (lhs[i + j] as i64) * (rhs[i + j] as i64);
+        }
+
+        acc
+    }
+
+    #[cfg(all(
+        target_arch = "arm",
+        target_feature = "dsp",
+        not(target_feature = "mve")
+    ))]
     {
         let pairs = len / 2;
         let remainder = len % 2;
@@ -186,7 +249,10 @@ pub fn vec_dot_s16(lhs: &[i16], rhs: &[i16]) -> i64 {
     }
 
     #[cfg(not(any(
-        all(target_arch = "arm", target_feature = "dsp"),
+        all(
+            target_arch = "arm",
+            any(target_feature = "mve", target_feature = "dsp")
+        ),
         target_arch = "riscv32"
     )))]
     {
