@@ -48,3 +48,6 @@ required-features = ["dsp", "libm"]
 name = "gesture_recognition"
 required-features = ["libm"]
 
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_feature, values("mve"))'] }
