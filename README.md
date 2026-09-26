@@ -41,6 +41,7 @@ Inspired by and synergized with ARM's **CMSIS-NN**, Google's **LiteRT / TensorFl
 | [`crates/embedded-nn-live`](crates/embedded-nn-live) | Binary USB-HS / UART HIL streaming protocol (`0xE6 0x4E` frames, CRC-16, vendor bulk `1209:e612`) and multi-modal 6-DOF / 9-DOF dataset parser. |
 | [`crates/embedded-nn-cli`](crates/embedded-nn-cli) | `enn` CLI for memory profiling, codegen, TFLite ingest, dataset validation, and HIL test runner. |
 | [`crates/embedded-nn-macros`](crates/embedded-nn-macros) | Procedural macro `#[embedded_nn_model("...")]` for compile-time model embedding and zero-allocation execution. |
+| [`crates/embedded-nn-aton`](crates/embedded-nn-aton) | Independent hardware acceleration backend and microcode compiler targeting the STM32N6 Neural-ART (ATON) NPU architecture. |
 
 ---
 
@@ -62,12 +63,15 @@ flowchart LR
         Arena --> RustCodegen["Rust #![no_std] Crate"]
         Arena --> CCodegen["C99 Standalone Header (.h)"]
         Arena --> Plugin["LiteRT Compiler Plugin (.so)"]
+        Arena --> AtonBackend["STM32N6 NPU Microcode (EcBinary)"]
     end
 
     subgraph Hardware ["4. Silicon Execution"]
-        RustCodegen --> STM32["STM32WBA65RI / Cortex-M33 / M4 / M7 / ESP32 / RP2040"]
+        RustCodegen --> STM32["Cortex-M33 / M4 / M7 / M55 / ESP32 / RP2040"]
         CCodegen --> STM32
+        AtonBackend --> STM32N6["STM32N6 Neural-ART NPU Hardware"]
         STM32 --> HIL["USB-HS / UART Live Inspector Telemetry"]
+        STM32N6 --> HIL
     end
 ```
 

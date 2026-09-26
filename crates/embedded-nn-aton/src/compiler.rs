@@ -1,4 +1,4 @@
-//! High-level ATON NPU graph compiler and code generator.
+//! High-level STM32N6 Neural-ART NPU graph compiler and hardware microcode generator.
 
 use crate::container::EcContainerBuilder;
 use crate::dma::{DmaChannel, ElementSize, StrengConfig};
@@ -22,7 +22,7 @@ pub enum EpochKind {
     Software { layer_id: usize, op_name: String },
 }
 
-/// A compiled TinyML network ready for deployment on the STM32N6 ATON NPU.
+/// A compiled TinyML network ready for deployment on the STM32N6 Neural-ART NPU hardware backend.
 pub struct AtonCompiledNetwork {
     pub name: String,
     pub container: EcContainerBuilder,

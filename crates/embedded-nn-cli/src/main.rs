@@ -28,7 +28,7 @@ enum Commands {
         #[arg(short, long)]
         out: Option<PathBuf>,
     },
-    /// Compile a model (.tflite or JSON ModelGraph) to STM32N6 Neural-ART (ATON) NPU Epoch Controller binary
+    /// Compile a model (.tflite or JSON ModelGraph) using the independent STM32N6 Neural-ART NPU hardware backend
     Aton {
         #[arg(short, long)]
         model: PathBuf,
@@ -148,7 +148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("==================================================");
             println!("  embedded-nn-aton: Compiled {}", graph.name);
             println!("==================================================");
-            println!("Target Architecture:  STM32N6 Neural-ART (ATON) NPU");
+            println!("Target Backend:       STM32N6 Neural-ART NPU (Hardware Acceleration)");
             println!(
                 "Input Shape / Dim:    {} bytes (symbol: {})",
                 compiled.input_size_bytes, input_sym

@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Open-source ST Neural-ART (ATON) NPU compiler and Epoch Controller binary assembler"
+description = "Independent hardware acceleration backend and microcode compiler targeting the STM32N6 Neural-ART NPU architecture"
 
 [dependencies]
 embedded-nn-compiler = { workspace = true }
