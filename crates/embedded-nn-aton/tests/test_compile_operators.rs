@@ -40,7 +40,7 @@ fn test_compile_conv2d_fused_relu() {
             padding: Padding2D::default(),
             dilation_h: 1,
             dilation_w: 1,
-            weights: vec![1i8; 3 * 3 * 1 * 8],
+            weights: vec![1i8; 3 * 3 * 8],
             packed_s4: None,
             bias: Some(vec![0i32; 8]),
             activation: ActivationType::Relu,
@@ -52,7 +52,7 @@ fn test_compile_conv2d_fused_relu() {
     let compiled = compiler.compile(&graph).expect("compilation failed");
 
     assert_eq!(compiled.name, "Conv2DNet");
-    assert_eq!(compiled.input_size_bytes, 28 * 28 * 1);
+    assert_eq!(compiled.input_size_bytes, 28 * 28);
     assert_eq!(compiled.output_size_bytes, 26 * 26 * 8);
     assert_eq!(compiled.epochs.len(), 1);
     assert!(matches!(compiled.epochs[0], EpochKind::Hardware { .. }));
@@ -500,7 +500,7 @@ fn test_compile_hybrid_npu_cpu_model() {
             padding: Padding2D::symmetric(1, 1),
             dilation_h: 1,
             dilation_w: 1,
-            weights: vec![1i8; 3 * 3 * 1 * 8],
+            weights: vec![1i8; 3 * 3 * 8],
             packed_s4: None,
             bias: Some(vec![0i32; 8]),
             activation: ActivationType::Relu,
