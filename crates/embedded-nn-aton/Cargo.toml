@@ -1,0 +1,19 @@
+[package]
+name = "embedded-nn-aton"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Independent hardware acceleration backend and microcode compiler targeting the STM32N6 Neural-ART NPU architecture"
+
+[dependencies]
+embedded-nn-compiler = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+byteorder = "1.5"
+
+[dev-dependencies]
+embedded-nn = { workspace = true }
+embedded-nn-tflite = { workspace = true }

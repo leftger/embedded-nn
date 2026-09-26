@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use embedded_nn_aton::AtonCompiler;
 use embedded_nn_codegen::RustCodeGenerator;
 use embedded_nn_compiler::arena::ArenaScheduler;
 use embedded_nn_compiler::dsp_contract::{DEFAULT_MEL_ENERGY_FLOOR, DspContract};
@@ -24,6 +25,17 @@ enum Commands {
         model: PathBuf,
         #[arg(short, long, default_value = "EmbeddedModel")]
         name: String,
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
+    /// Compile a model (.tflite or JSON ModelGraph) using the independent STM32N6 Neural-ART NPU hardware backend
+    Aton {
+        #[arg(short, long)]
+        model: PathBuf,
+        #[arg(long, default_value = "_in")]
+        input_sym: String,
+        #[arg(long, default_value = "_out")]
+        output_sym: String,
         #[arg(short, long)]
         out: Option<PathBuf>,
     },
@@ -109,6 +121,103 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Generated Rust inference code written to {:?}", out_path);
                 println!("DSP contract written to {:?}", sidecar);
             } else {
+                println!("{}", code);
+            }
+        }
+        Commands::Aton {
+            model,
+            input_sym,
+            output_sym,
+            out,
+        } => {
+            let graph: ModelGraph = if model.extension().and_then(|s| s.to_str()) == Some("tflite")
+            {
+                let bytes = fs::read(&model)?;
+                embedded_nn_tflite::import_tflite(&bytes)
+                    .map_err(|e| format!("failed to import {:?}: {}", model, e))?
+            } else {
+                let json_content = fs::read_to_string(&model)?;
+                serde_json::from_str(&json_content)?
+            };
+
+            let compiler = AtonCompiler::new().with_symbols(&input_sym, &output_sym);
+            let compiled = compiler
+                .compile(&graph)
+                .map_err(|e| format!("ATON compile error: {}", e))?;
+
+            println!("==================================================");
+            println!("  embedded-nn-aton: Compiled {}", graph.name);
+            println!("==================================================");
+            println!("Target Backend:       STM32N6 Neural-ART NPU (Hardware Acceleration)");
+            println!(
+                "Input Shape / Dim:    {} bytes (symbol: {})",
+                compiled.input_size_bytes, input_sym
+            );
+            println!(
+                "Output Shape / Dim:   {} bytes (symbol: {})",
+                compiled.output_size_bytes, output_sym
+            );
+            println!(
+                "Hardware Epochs:      {}",
+                compiled
+                    .epochs
+                    .iter()
+                    .filter(|e| matches!(e, embedded_nn_aton::EpochKind::Hardware { .. }))
+                    .count()
+            );
+            println!(
+                "Software Fallbacks:   {}",
+                compiled
+                    .epochs
+                    .iter()
+                    .filter(|e| matches!(e, embedded_nn_aton::EpochKind::Software { .. }))
+                    .count()
+            );
+            println!(
+                "Static Weight Size:   {} bytes",
+                compiled.static_weights.len()
+            );
+
+            let u64_words = compiled
+                .build_blob_u64()
+                .map_err(|e| format!("failed to build EcBinary: {}", e))?;
+            println!(
+                "EcBinary Container:   {} u64 words ({} bytes)",
+                u64_words.len(),
+                u64_words.len() * 8
+            );
+            println!("==================================================");
+
+            if let Some(out_path) = out {
+                let ext = out_path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                match ext {
+                    "h" => {
+                        let header = compiled
+                            .emit_c_header()
+                            .map_err(|e| format!("C emit error: {}", e))?;
+                        fs::write(&out_path, header)?;
+                        println!("C Header written to {:?}", out_path);
+                    }
+                    "rs" => {
+                        let code = compiled
+                            .emit_rust_code()
+                            .map_err(|e| format!("Rust emit error: {}", e))?;
+                        fs::write(&out_path, code)?;
+                        println!("Rust code written to {:?}", out_path);
+                    }
+                    _ => {
+                        let mut bytes = Vec::with_capacity(u64_words.len() * 8);
+                        for &word in &u64_words {
+                            bytes.extend_from_slice(&word.to_le_bytes());
+                        }
+                        fs::write(&out_path, bytes)?;
+                        println!("Binary EcBinary written to {:?}", out_path);
+                    }
+                }
+            } else {
+                let code = compiled
+                    .emit_rust_code()
+                    .map_err(|e| format!("Rust emit error: {}", e))?;
                 println!("{}", code);
             }
         }
