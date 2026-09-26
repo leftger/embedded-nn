@@ -16,6 +16,7 @@ embedded-nn-compiler = { workspace = true }
 embedded-nn-codegen = { workspace = true }
 embedded-nn-live = { workspace = true }
 embedded-nn-tflite = { workspace = true }
+embedded-nn-aton = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

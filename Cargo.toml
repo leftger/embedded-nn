@@ -11,6 +11,7 @@ members = [
     "crates/embedded-nn-tflite",
     "crates/embedded-nn-train",
     "crates/embedded-nn-litert-plugin",
+    "crates/embedded-nn-aton",
 ]
 exclude = [
     "examples/qemu-lm3s6965",
@@ -40,6 +41,7 @@ embedded-nn-macros = { path = "crates/embedded-nn-macros", version = "0.2.2" }
 embedded-nn-live = { path = "crates/embedded-nn-live", version = "0.2.2" }
 embedded-nn-tflite = { path = "crates/embedded-nn-tflite", version = "0.2.2" }
 embedded-nn-train = { path = "crates/embedded-nn-train", version = "0.2.2" }
+embedded-nn-aton = { path = "crates/embedded-nn-aton", version = "0.2.2" }
 
 libm = { version = "0.2.11" }
 serde = { version = "1.0", default-features = false, features = ["derive"] }

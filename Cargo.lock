@@ -2653,10 +2653,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-nn-aton"
+version = "0.2.2"
+dependencies = [
+ "byteorder",
+ "embedded-nn",
+ "embedded-nn-compiler",
+ "embedded-nn-tflite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "embedded-nn-cli"
 version = "0.2.2"
 dependencies = [
  "clap",
+ "embedded-nn-aton",
  "embedded-nn-codegen",
  "embedded-nn-compiler",
  "embedded-nn-live",
