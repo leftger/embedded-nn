@@ -289,7 +289,20 @@ pub fn import_tflite(bytes: &[u8]) -> Result<ModelGraph, ImportError> {
             }
         };
 
-        let (out_scale, out_zero_point) = read_per_tensor_quant(&output_tensor)?;
+        // Only integer activation tensors carry quantization metadata. Float
+        // results (e.g. the output of a trailing `DEQUANTIZE`, which is the
+        // common shape of a quantized-graph `serving_default` output) and
+        // integer bookkeeping tensors such as `RESHAPE`/`PAD` shapes do not
+        // define a scale, and requiring one rejects otherwise valid models.
+        let quantized_output = matches!(
+            output_tensor.type_(),
+            tflite::TensorType::INT8 | tflite::TensorType::UINT8 | tflite::TensorType::INT16
+        );
+        let (out_scale, out_zero_point) = if quantized_output {
+            read_per_tensor_quant(&output_tensor)?
+        } else {
+            (1.0, 0)
+        };
         if matches!(
             builtin,
             tflite::BuiltinOperator::MAX_POOL_2D
@@ -1022,13 +1035,24 @@ fn import_pad(
         ));
     }
     let pad_value = if op_inputs.len() >= 3 && op_inputs.get(2) >= 0 {
+        // PADV2: `constant_values` is itself a quantized constant tensor, so its
+        // stored int8 value is already in the activation domain.
         *read_i8_buffer(&tensors.get(op_inputs.get(2) as usize), buffers)?
             .first()
             .ok_or(ImportError::UnsupportedConfiguration(
                 "PADV2 constant_values is empty".into(),
             ))?
     } else {
-        0
+        // Plain PAD pads with *real* 0.0, which quantizes to the tensor's
+        // zero-point (`q = 0 / scale + zero_point`), not to int8 0. Using 0
+        // here shifts every padded border by `-zero_point` and corrupts all
+        // downstream activations.
+        //
+        // An unquantized tensor has no zero-point, and then real 0.0 *is* 0.
+        let zero_point = read_per_tensor_quant(&tensors.get(op_inputs.get(0) as usize))
+            .map(|(_, zero_point)| zero_point)
+            .unwrap_or(0);
+        zero_point as i8
     };
     Ok(builder.add_pad_layer(
         name,
@@ -1835,6 +1859,109 @@ pub mod constructed_fixtures {
         )
     }
 
+    /// A minimal `PAD` graph: UINT8 `[1,2,2,1]` input padded to `[1,4,4,1]`.
+    pub fn build_pad_model() -> Vec<u8> {
+        let mut fbb = FlatBufferBuilder::new();
+
+        let empty_buffer = Buffer::create(&mut fbb, &BufferArgs::default());
+        let pads_bytes = i32_bias_bytes(&[0, 0, 1, 1, 1, 1, 0, 0]);
+        let pads_data = fbb.create_vector(&pads_bytes);
+        let pads_buffer = Buffer::create(
+            &mut fbb,
+            &BufferArgs {
+                data: Some(pads_data),
+                ..Default::default()
+            },
+        );
+        let buffers = fbb.create_vector(&[empty_buffer, pads_buffer]);
+
+        let input_tensor = build_typed_tensor(
+            &mut fbb,
+            &TensorSpec {
+                shape: &[1, 2, 2, 1],
+                buffer: 0,
+                scale: 1.0 / 127.0,
+                zero_point: 131,
+            },
+            TensorType::UINT8,
+        );
+        let pads_tensor = build_typed_tensor(
+            &mut fbb,
+            &TensorSpec {
+                shape: &[4, 2],
+                buffer: 1,
+                scale: 0.0,
+                zero_point: 0,
+            },
+            TensorType::INT32,
+        );
+        let output_tensor = build_typed_tensor(
+            &mut fbb,
+            &TensorSpec {
+                shape: &[1, 4, 4, 1],
+                buffer: 0,
+                scale: 1.0 / 127.0,
+                zero_point: 131,
+            },
+            TensorType::UINT8,
+        );
+        let tensors = fbb.create_vector(&[input_tensor, pads_tensor, output_tensor]);
+
+        let op_inputs = fbb.create_vector(&[0i32, 1]);
+        let op_outputs = fbb.create_vector(&[2i32]);
+        let operator = Operator::create(
+            &mut fbb,
+            &OperatorArgs {
+                opcode_index: 0,
+                inputs: Some(op_inputs),
+                outputs: Some(op_outputs),
+                ..Default::default()
+            },
+        );
+        let operators = fbb.create_vector(&[operator]);
+
+        let sg_inputs = fbb.create_vector(&[0i32]);
+        let sg_outputs = fbb.create_vector(&[2i32]);
+        let subgraph = SubGraph::create(
+            &mut fbb,
+            &SubGraphArgs {
+                tensors: Some(tensors),
+                inputs: Some(sg_inputs),
+                outputs: Some(sg_outputs),
+                operators: Some(operators),
+                name: None,
+            },
+        );
+        let subgraphs = fbb.create_vector(&[subgraph]);
+
+        let opcode = OperatorCode::create(
+            &mut fbb,
+            &OperatorCodeArgs {
+                deprecated_builtin_code: BuiltinOperator::PAD.0 as i8,
+                custom_code: None,
+                version: 1,
+                builtin_code: BuiltinOperator::PAD,
+            },
+        );
+        let opcodes = fbb.create_vector(&[opcode]);
+
+        let model = Model::create(
+            &mut fbb,
+            &ModelArgs {
+                version: 3,
+                operator_codes: Some(opcodes),
+                subgraphs: Some(subgraphs),
+                description: None,
+                buffers: Some(buffers),
+                metadata_buffer: None,
+                metadata: None,
+                signature_defs: None,
+            },
+        );
+        fbb.finish_minimal(model);
+        fbb.finished_data().to_vec()
+    }
+
     fn build_fc_model(
         tensor_type: TensorType,
         input_zero_point: i64,
@@ -2629,10 +2756,25 @@ mod tests {
     use crate::constructed_fixtures::{
         build_add_transpose_model, build_batch_matmul_adj_x_model, build_batch_matmul_model,
         build_batch_matmul_rank3_model, build_conv_pool_reshape_fc_softmax_model,
-        build_conv2d_per_channel_model, build_fc_only_model, build_gelu_model, build_sine_fc_model,
-        build_uint8_fc_model,
+        build_conv2d_per_channel_model, build_fc_only_model, build_gelu_model, build_pad_model,
+        build_sine_fc_model, build_uint8_fc_model,
     };
     use embedded_nn_compiler::builder::ModelBuilder;
+
+    #[test]
+    fn plain_pad_pads_with_the_input_zero_point_not_int8_zero() {
+        let graph = import_tflite(&build_pad_model()).expect("PAD import should succeed");
+        match &graph.layers[0].op {
+            OpPayload::Pad { pad_value, .. } => {
+                // UINT8 zero-point 131 becomes 3 in the int8 domain, and that is
+                // what real 0.0 quantizes to. Padding with a literal 0 instead
+                // shifts every border by `-zero_point` and corrupts everything
+                // downstream.
+                assert_eq!(*pad_value, 3);
+            }
+            other => panic!("expected Pad, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_import_fc_only_model_structure() {

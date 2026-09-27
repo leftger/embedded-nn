@@ -439,17 +439,47 @@ impl<'g> HostInterpreter<'g> {
                 reduce_width,
                 reduce_channels,
                 ..
-            } => reduce_mean_s8(
-                input_tensor.shape.batches,
-                input_tensor.shape.height,
-                input_tensor.shape.width,
-                input_tensor.shape.channels,
-                *reduce_height,
-                *reduce_width,
-                *reduce_channels,
-                &input,
-                &mut output,
-            ),
+            } => {
+                // `reduce_mean_s8` returns the plain integer mean of the
+                // *quantized* values, i.e. `mean(real)/S_in + zp_in`. TFLite's
+                // MEAN (like any rescaling op) generally has `S_out != S_in`
+                // — a global average pool after a conv commonly drops the scale
+                // by the pooling factor — so the result has to be requantized:
+                //
+                //     q_out = (mean_q - zp_in) * S_in / S_out + zp_out
+                //
+                // Without this the pooled activations keep the input scale,
+                // which compresses every downstream logit.
+                let (scale_in, zp_in) = (input_tensor.quant.scale, input_tensor.quant.zero_point);
+                let (scale_out, zp_out) =
+                    (output_tensor.quant.scale, output_tensor.quant.zero_point);
+                reduce_mean_s8(
+                    input_tensor.shape.batches,
+                    input_tensor.shape.height,
+                    input_tensor.shape.width,
+                    input_tensor.shape.channels,
+                    *reduce_height,
+                    *reduce_width,
+                    *reduce_channels,
+                    &input,
+                    &mut output,
+                )
+                .map(|()| {
+                    if scale_in != scale_out || zp_in != zp_out {
+                        let ratio = scale_in / scale_out;
+                        for value in output.iter_mut() {
+                            let real = (*value as f32 - zp_in as f32) * ratio + zp_out as f32;
+                            // `f32::round` lives in `std`; round half away from zero.
+                            let rounded = if real >= 0.0 {
+                                (real + 0.5) as i32
+                            } else {
+                                (real - 0.5) as i32
+                            };
+                            *value = rounded.clamp(i8::MIN as i32, i8::MAX as i32) as i8;
+                        }
+                    }
+                })
+            }
             OpPayload::ElementwiseAdd {
                 quant,
                 activation: kind,
@@ -847,6 +877,43 @@ mod tests {
             zero_point: 0,
             scale: 1.0,
         }
+    }
+
+    #[test]
+    fn mean_requantizes_into_the_output_scale() {
+        let mut builder = ModelBuilder::new("mean_requant");
+        let input = builder.add_input(
+            "input",
+            TensorShape::new_4d(1, 2, 2, 1),
+            DataType::Int8,
+            Some(QuantParams {
+                multiplier: 1_073_741_824,
+                shift: 1,
+                zero_point: 0,
+                scale: 0.25,
+            }),
+        );
+        let mean = builder.add_mean_layer("mean", input, true, true, false, false);
+        // The pooled tensor is expressed in a finer scale than its input, so the
+        // integer mean has to be rescaled by `S_in / S_out == 2`.
+        builder
+            .set_tensor_quant(
+                mean,
+                QuantParams {
+                    multiplier: 1_073_741_824,
+                    shift: 1,
+                    zero_point: 0,
+                    scale: 0.125,
+                },
+            )
+            .unwrap();
+        builder.mark_output(mean);
+        let graph = builder.build();
+        let mut host = HostInterpreter::new(&graph).unwrap();
+        // mean([1, 2, 3, 4]) == 2.5, which rounds to 3 in the input domain and
+        // becomes 3 * 2 == 6 once requantized. Without the rescale this is 3.
+        let out = host.run(&[&[1, 2, 3, 4]]).unwrap();
+        assert_eq!(out[0], vec![6]);
     }
 
     #[test]
